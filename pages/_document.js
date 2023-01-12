@@ -1,7 +1,7 @@
-import React from "react";
-import Document, { Html, Head, Main, NextScript } from "next/document";
-import { ServerStyleSheets } from "@material-ui/core/styles";
-import theme from "../theme";
+import React from 'react';
+import Document, { Html, Head, Main, NextScript } from 'next/document';
+import { ServerStyleSheets } from '@material-ui/core/styles';
+import theme from '../theme';
 
 export default class MyDocument extends Document {
   render() {
@@ -9,51 +9,73 @@ export default class MyDocument extends Document {
       <Html lang="en">
         <Head>
           <meta name="theme-color" content={theme.palette.primary.main} />
-          <meta name="description" content="แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว" />
+          <meta
+            name="description"
+            content="แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว"
+          />
           <meta name="keywords" content="ichord,chordtabs,chord,chordtab" />
           <meta name="author" content="Chairat Akkaramethachote" />
           <meta name="title" content="iChord" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+          />
 
-          <meta name='application-name' content='iChord' />
-          <meta name='apple-mobile-web-app-capable' content='yes' />
-          <meta name='apple-mobile-web-app-status-bar-style' content='default' />
-          <meta name='apple-mobile-web-app-title' content='iChord' />
-          <meta name='description' content='แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว' />
-          <meta name='format-detection' content='telephone=no' />
-          <meta name='mobile-web-app-capable' content='yes' />
-          <meta name='msapplication-config' content='/icons/browserconfig.xml' />
-          <meta name='msapplication-TileColor' content='#18191A' />
-          <meta name='msapplication-tap-highlight' content='no' />
-          <meta name='theme-color' content='#18191A' />
+          <meta name="application-name" content="iChord" />
+          <meta name="apple-mobile-web-app-capable" content="yes" />
+          <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+          <meta name="apple-mobile-web-app-title" content="iChord" />
+          <meta
+            name="description"
+            content="แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว"
+          />
+          <meta name="format-detection" content="telephone=no" />
+          <meta name="mobile-web-app-capable" content="yes" />
+          <meta name="msapplication-config" content="/icons/browserconfig.xml" />
+          <meta name="msapplication-TileColor" content="#18191A" />
+          <meta name="msapplication-tap-highlight" content="no" />
+          <meta name="theme-color" content="#18191A" />
 
-          <link rel='apple-touch-icon' sizes='180x180' href='/images/meta.png' />
-          <link rel='icon' type='image/png' sizes='32x32' href='/images/meta.png' />
-          <link rel='icon' type='image/png' sizes='16x16' href='/images/meta.png' />
-          <link rel='manifest' href='/manifest.json' />
-          <link rel='mask-icon' href='/icons/safari-pinned-tab.svg' color='#18191A' />
+          <link rel="apple-touch-icon" sizes="180x180" href="/images/meta.png" />
+          <link rel="icon" type="image/png" sizes="32x32" href="/images/meta.png" />
+          <link rel="icon" type="image/png" sizes="16x16" href="/images/meta.png" />
+          <link rel="manifest" href="/manifest.json" />
+          <link rel="mask-icon" href="/icons/safari-pinned-tab.svg" color="#18191A" />
           <link rel="icon" href="/favicon.png" />
-          <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@100;200;300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-          <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@100;200;300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+          <link
+            href="https://fonts.googleapis.com/css2?family=Kanit:wght@100;200;300;400;500;600;700;800;900&display=swap"
+            rel="stylesheet"
+          />
+          <link
+            href="https://fonts.googleapis.com/css2?family=Raleway:wght@100;200;300;400;500;600;700;800;900&display=swap"
+            rel="stylesheet"
+          />
 
-          <meta name='twitter:card' content='summary_large_image' />
-          <meta name='twitter:url' content='https://ichordapp.web.app/' />
-          <meta name='twitter:title' content='iChord' />
-          <meta name='twitter:description' content='แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว' />
-          <meta name='twitter:image' content='https://ichordapp.web.app/images/meta.png' />
-          <meta name='twitter:creator' content='@DavidWShadow' />
-          <meta property='og:type' content='website' />
-          <meta property='og:title' content='iChord' />
-          <meta property='og:description' content='แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว' />
-          <meta property='og:site_name' content='iChord' />
-          <meta property='og:url' content='https://ichordapp.web.app/' />
-          <meta property='og:image' content='https://ichordapp.web.app/images/meta.png' />
-
+          <meta name="twitter:card" content="summary_large_image" />
+          <meta name="twitter:url" content="https://ichordapp.web.app/" />
+          <meta name="twitter:title" content="iChord" />
+          <meta
+            name="twitter:description"
+            content="แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว"
+          />
+          <meta name="twitter:image" content="https://ichordapp.web.app/images/meta.png" />
+          <meta name="twitter:creator" content="@DavidWShadow" />
+          <meta property="og:type" content="website" />
+          <meta property="og:title" content="iChord" />
+          <meta
+            property="og:description"
+            content="แอพพลิเคชั่นที่ช่วยให้คุณสามารถดูคอร์ดกีต้าร์และเชื่อมต่อกันในวงได้อย่างรวดเร็ว"
+          />
+          <meta property="og:site_name" content="iChord" />
+          <meta property="og:url" content="https://ichordapp.web.app/" />
+          <meta property="og:image" content="https://ichordapp.web.app/images/meta.png" />
         </Head>
-        <body style={{ backgroundColor: "#18191A" }}>
+        <body style={{ backgroundColor: '#18191A' }}>
           <Main />
           <NextScript />
         </body>
+
+        {process.env.NODE_ENV === 'production' && <script async src="newrelic.js" />}
       </Html>
     );
   }
@@ -98,9 +120,6 @@ MyDocument.getInitialProps = async (ctx) => {
   return {
     ...initialProps,
     // Styles fragment is rendered after the app and page rendering finish.
-    styles: [
-      ...React.Children.toArray(initialProps.styles),
-      sheets.getStyleElement(),
-    ],
+    styles: [...React.Children.toArray(initialProps.styles), sheets.getStyleElement()],
   };
 };
