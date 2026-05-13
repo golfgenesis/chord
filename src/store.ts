@@ -155,11 +155,37 @@ export const useApp = create<State>((set, get) => ({
       clientId = randomClientId();
       saveLocal("clientId", clientId);
     }
-    let roomCode = loadLocal<string>("roomCode", "");
-    if (!/^\d{6}$/.test(roomCode)) {
-      roomCode = randomRoom();
+    // Room code resolution order:
+    //   1. URL path  `/{6 digits}`  — wins so shared links land in the right
+    //      room even if the recipient had a different one saved locally.
+    //   2. localStorage              — return visit, no link.
+    //   3. random                    — first time, no link.
+    // Whichever wins is written back to the URL via history.replaceState so
+    // it's always shareable from the address bar.
+    let roomCode: string;
+    const urlMatch = window.location.pathname.match(/^\/(\d{6})$/);
+    // urlForcedRoom: the user landed on this device via a shared link, so
+    // their URL choice MUST beat whatever stale roomCode is sitting in this
+    // client's Firestore doc from a previous session. Without this, the
+    // first cloud-sync snapshot would call setRoomCode(remote) and bounce
+    // the URL back to the old room.
+    const urlForcedRoom = Boolean(urlMatch);
+    if (urlMatch) {
+      roomCode = urlMatch[1];
       saveLocal("roomCode", roomCode);
+    } else {
+      roomCode = loadLocal<string>("roomCode", "");
+      if (!/^\d{6}$/.test(roomCode)) {
+        roomCode = randomRoom();
+        saveLocal("roomCode", roomCode);
+      }
     }
+    history.replaceState(null, "", `/${roomCode}`);
+    // Back/forward navigation between rooms.
+    window.addEventListener("popstate", () => {
+      const m = window.location.pathname.match(/^\/(\d{6})$/);
+      if (m && m[1] !== get().roomCode) get().setRoomCode(m[1]);
+    });
     const invertImages = loadLocal<boolean>("invertImages", true);
     set({ invertImages });
 
@@ -206,6 +232,11 @@ export const useApp = create<State>((set, get) => ({
 
     // Cross-device sync of per-user data via Firestore (Anonymous Auth).
     // Playlists are per-room (not per-user) and handled by the room sync above.
+    // The first remote snapshot may carry a stale roomCode from this client's
+    // last session. If the URL just told us which room to be in, that wins —
+    // we push the URL room up to cloud instead of adopting cloud's old value.
+    // Subsequent snapshots can adopt normally (that's cross-device sync).
+    let pendingUrlPush = urlForcedRoom;
     csMod
       ?.startCloudSync(
         clientId,
@@ -218,6 +249,13 @@ export const useApp = create<State>((set, get) => ({
           });
           saveJSON("favorites", remote.favorites ?? []);
           saveJSON("latest", remoteLatest);
+          if (pendingUrlPush) {
+            pendingUrlPush = false;
+            if (remote.roomCode !== get().roomCode) {
+              csMod?.pushUpdate({ roomCode: get().roomCode });
+            }
+            return;
+          }
           if (
             remote.roomCode &&
             /^\d{6}$/.test(remote.roomCode) &&
@@ -338,6 +376,11 @@ export const useApp = create<State>((set, get) => ({
     });
 
     saveLocal("roomCode", code);
+    // Keep the URL in sync so the address bar is always shareable. We use
+    // pushState (not replaceState) so back/forward walks through prior rooms.
+    if (window.location.pathname !== `/${code}`) {
+      history.pushState(null, "", `/${code}`);
+    }
     if (pushToCloud) csMod?.pushUpdate({ roomCode: code });
     set({
       roomCode: code,

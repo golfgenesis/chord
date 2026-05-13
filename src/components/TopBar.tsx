@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useApp, useIsRoomOwner } from "../store";
 
 export function TopBar() {
@@ -57,7 +57,7 @@ export function TopBar() {
               >
                 <RefreshIcon />
               </IconButton>
-              <FullscreenButton />
+              <ShareButton roomCode={roomCode} />
             </>
           )}
         </div>
@@ -287,36 +287,52 @@ function CheckIcon({ className = "" }: { className?: string }) {
   );
 }
 
-function FullscreenButton() {
-  const [isFs, setIsFs] = useState(false);
+function ShareButton({ roomCode }: { roomCode: string }) {
+  // After a successful copy, flash a check mark for a moment so the user
+  // gets visual feedback even when the native share sheet didn't open
+  // (e.g. desktop browsers fall back to the clipboard).
+  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    const sync = () => setIsFs(Boolean(document.fullscreenElement));
-    sync();
-    document.addEventListener("fullscreenchange", sync);
-    return () => document.removeEventListener("fullscreenchange", sync);
-  }, []);
-
-  function toggle() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {});
+  async function share() {
+    const url = `${window.location.origin}/${roomCode}`;
+    const shareData = {
+      title: "Chord — band sync",
+      text: `เข้ามาที่ห้อง ${roomCode} กันนะ`,
+      url,
+    };
+    // navigator.share is gated behind a user gesture on iOS/Android and
+    // throws "AbortError" if the user dismisses the sheet — that's not a
+    // real error, just no-op.
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share(shareData);
+        return;
+      } catch (err) {
+        if ((err as DOMException)?.name === "AbortError") return;
+        // fall through to clipboard
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // ignore — nothing more we can do
     }
   }
 
   return (
     <IconButton
-      onClick={toggle}
-      title={isFs ? "ออกจาก Fullscreen" : "Fullscreen (ซ่อนแถบ browser)"}
-      aria-label="Toggle fullscreen"
+      onClick={share}
+      title={copied ? "คัดลอกลิงค์แล้ว" : "แชร์ลิงค์ห้องนี้ให้เพื่อน"}
+      aria-label="Share room link"
     >
-      {isFs ? <ExitFsIcon /> : <EnterFsIcon />}
+      {copied ? <CheckIcon className="size-[18px]" /> : <ShareIcon />}
     </IconButton>
   );
 }
 
-function EnterFsIcon() {
+function ShareIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -327,23 +343,9 @@ function EnterFsIcon() {
       strokeLinejoin="round"
       className="size-[18px]"
     >
-      <path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" />
-    </svg>
-  );
-}
-
-function ExitFsIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M8 4v4H4M16 4v4h4M8 20v-4H4M16 20v-4h4" />
+      <path d="M12 3v12" />
+      <path d="m8 7 4-4 4 4" />
+      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
     </svg>
   );
 }

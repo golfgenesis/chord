@@ -49,6 +49,11 @@ export async function startCloudSync(
       if (snap.metadata.hasPendingWrites) return;
       if (isFirst) {
         isFirst = false;
+        // Set ready BEFORE invoking the caller's handler — the handler may
+        // itself call pushUpdate (e.g. when a URL-forced room needs to be
+        // written up to override a stale cloud value), and pushUpdate is
+        // a no-op while !ready.
+        ready = true;
         if (snap.exists()) {
           onRemoteUpdate(snap.data() as UserData);
         } else {
@@ -56,7 +61,6 @@ export async function startCloudSync(
             console.error("cloudSync init write failed:", err),
           );
         }
-        ready = true;
       } else if (snap.exists()) {
         onRemoteUpdate(snap.data() as UserData);
       }
