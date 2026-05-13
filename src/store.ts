@@ -526,7 +526,9 @@ export const useApp = create<State>((set, get) => {
     if (window.location.pathname !== roomPath) {
       history.pushState(null, "", roomPath);
     }
-    // broadcast to room
+    // broadcast to room — `pickerViewing: true` signals to receivers that
+    // the picker is currently in fullscreen, so their auto-open should
+    // fire (and stay open until the picker explicitly closes).
     if (broadcast) {
       const sync = get().sync;
       const clientId = get().clientId;
@@ -535,16 +537,39 @@ export const useApp = create<State>((set, get) => {
         songName: song.name,
         pickedBy: clientId,
         pickedAt: Date.now(),
+        pickerViewing: true,
       });
     }
   },
 
   close() {
+    const prevViewing = get().viewing;
     set({ viewing: null });
     // Strip the songId segment back off the URL when fullscreen closes.
     const roomPath = `/${get().roomCode}`;
     if (window.location.pathname !== roomPath) {
       history.pushState(null, "", roomPath);
+    }
+    // Only the room's picker broadcasts a close. Receivers closing locally
+    // is a private action — it shouldn't drag the picker (or other
+    // receivers) out of fullscreen. We also gate on "I'm closing the song
+    // the room is on" so closing a stale local view (after the picker
+    // already moved on) doesn't fire a misleading broadcast.
+    const room = get().room;
+    const myClientId = get().clientId;
+    const sync = get().sync;
+    if (
+      sync &&
+      room &&
+      room.songId !== null &&
+      room.pickedBy === myClientId &&
+      room.pickerViewing !== false &&
+      prevViewing &&
+      prevViewing.id === room.songId
+    ) {
+      sync
+        .publish({ ...room, pickerViewing: false })
+        .catch((err) => console.error("close broadcast failed:", err));
     }
   },
 

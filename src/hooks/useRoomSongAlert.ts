@@ -49,23 +49,50 @@ export function useRoomSongAlert() {
   // the room, not have to wait for the band leader to pick a second song
   // before auto-open kicks in.
   const lastSongId = useRef<number | null>(null);
+  // Track the picker's "still in fullscreen" flag so we can detect the
+  // transition where the picker closes their viewer — when that happens
+  // receivers should close too, but a receiver closing locally is private
+  // and never flips this flag.
+  const lastPickerViewing = useRef<boolean>(true);
 
   useEffect(() => {
     const songId = room?.songId;
-    if (!songId) {
-      // Room cleared — reset so the next non-null id is treated as new.
-      lastSongId.current = null;
-      return;
-    }
+    // pickerViewing is optional on the wire (legacy rooms predate it).
+    // Treat missing as `true` so old snapshots behave the same as before.
+    const pickerViewing = room?.pickerViewing !== false;
+    const prevSongId = lastSongId.current;
+    const prevPickerViewing = lastPickerViewing.current;
+    lastSongId.current = songId ?? null;
+    lastPickerViewing.current = pickerViewing;
 
-    if (songId === lastSongId.current) return;
-    lastSongId.current = songId;
+    if (!songId) return;
 
-    // The local user picked this themselves — `open()` already ran.
+    // The local user picked this themselves — `open()` (and any later
+    // close broadcast) already ran. Skip auto-open AND skip auto-close.
     if (room?.pickedBy === clientId) return;
 
     const song = byId.get(songId);
     if (!song) return;
+
+    // Detect the "picker just closed" transition: same song, but
+    // pickerViewing flipped true → false. Mirror their close locally if
+    // (and only if) we're currently looking at the same song they were.
+    const closedByPicker =
+      songId === prevSongId && prevPickerViewing && !pickerViewing;
+    if (closedByPicker) {
+      const cur = useApp.getState().viewing;
+      if (cur && cur.id === songId) useApp.getState().close();
+      return;
+    }
+
+    // Auto-open trigger: a new song appeared OR the picker re-opened the
+    // existing one. If they've closed and not re-engaged (pickerViewing
+    // still false), don't pop the sheet — just update bookkeeping.
+    const newSong = songId !== prevSongId;
+    const pickerReopened =
+      songId === prevSongId && !prevPickerViewing && pickerViewing;
+    if (!newSong && !pickerReopened) return;
+    if (!pickerViewing) return;
 
     // Auto-open ON: pop the fullscreen chord sheet as the primary feedback.
     // Auto-open OFF: the user explicitly doesn't want the takeover, so the
@@ -126,5 +153,5 @@ export function useRoomSongAlert() {
         }
       })();
     }
-  }, [room?.songId, room?.pickedBy, clientId, byId, open, autoOpen, roomCode]);
+  }, [room?.songId, room?.pickedBy, room?.pickerViewing, clientId, byId, open, autoOpen, roomCode]);
 }

@@ -23,11 +23,24 @@ Three sync layers, three different stores, intentionally separated:
 
 1. **Local-only** (`src/lib/persist.ts`) — `idb-keyval` for `favorites`/`latest`/`playlists`, `localStorage` for `clientId`/`roomCode`/`invertImages`/`autoOpen`.
 2. **Per-client cloud** (`src/lib/cloudSync.ts`) — Firestore doc at `clients/{clientId}` mirrors `favorites`/`latest`/`roomCode` across devices that share a `clientId`. **No Firebase Auth** — `clientId` is an 8-char random string in localStorage, so Firestore rules must allow open read/write on `clients/{clientId}`. This was a deliberate switch from anonymous auth because orphan auth records were accumulating on every cache clear.
-3. **Per-room realtime** (`src/lib/firebase.ts`, RTDB) — `rooms/{code}/{current,playlists,owner}`. Falls back to a `BroadcastChannel` mock when `VITE_FIREBASE_*` env vars are absent — only useful for same-browser tab testing.
+3. **Per-room realtime** (`src/lib/firebase.ts`, RTDB) — `rooms/{code}/{current,owner,playlists/{clientId}}`. Falls back to a `BroadcastChannel` mock when `VITE_FIREBASE_*` env vars are absent — only useful for same-browser tab testing.
 
 ### Room ownership
 
-First device into a fresh room atomically claims `rooms/{code}/owner` via `runTransaction`. The owner arms `onDisconnect.remove()` on the *entire* `rooms/{code}` node, so a closed tab / killed PWA wipes the room. **Critical bug fix encoded in [src/store.ts](src/store.ts):** when the owner disconnects, every guest sees `owner: null` and races to re-claim via `claimOwner` (the RTDB transaction picks exactly one winner). The earlier "first snapshot only" claim logic left rooms stuck ownerless after a leader left. The same code path also refuses to wipe local `playlists` on a null remote — the winning new owner re-publishes from their copy.
+First device into a fresh room atomically claims `rooms/{code}/owner` via `runTransaction`. The owner's `onDisconnect` only removes the `/owner` key (not the whole `rooms/{code}` node) — guests' per-client playlist entries and the shared `/current` selection stay put when the owner's tab dies. When the owner disconnects, every guest sees `owner: null` and races to re-claim via `claimOwner`; the RTDB transaction picks exactly one winner. The earlier "first snapshot only" claim logic left rooms stuck ownerless after a leader left.
+
+### Per-client playlists
+
+Playlists belong to people, not rooms. Each member publishes their own list to `rooms/{code}/playlists/{clientId}` with an `onDisconnect.remove()` on that node so the entry self-cleans when the tab closes; subscribers read the whole `rooms/{code}/playlists` map and split it into "mine" vs `othersPlaylists`. The UI uses `useMergedPlaylists()` (in [src/store.ts](src/store.ts)) — owner-first, then me, then everyone else by `clientId`, with `(2)/(3)/…` suffixes on duplicate names. Edit affordances (rename, delete, add/remove songs, DnD reorder) are gated on `entry.isMine`; everyone else's lists render as read-only. The previous "owner is the sole publisher" model is gone — there's no longer any "seed playlists when becoming owner" logic.
+
+### Picker view-state sync (auto-open + close)
+
+`RoomState.pickerViewing` (optional, defaults to `true` for legacy snapshots) is `true` while the picker still has the fullscreen sheet open and goes `false` when the picker closes. [src/hooks/useRoomSongAlert.ts](src/hooks/useRoomSongAlert.ts) reacts to transitions:
+- songId changes, or pickerViewing flips `false→true` → auto-open (if `autoOpen`) + notify.
+- pickerViewing flips `true→false` → close locally (only if currently viewing the same songId).
+- Picks made by the local client are skipped entirely (no echo).
+
+A receiver closing their own fullscreen never flips `pickerViewing` — only the picker's `close()` broadcasts, and only when their local `viewing` matches the room's current `songId`. NowPlaying click is `open(song, mine)`: the picker re-engaging re-broadcasts `pickerViewing: true`, a receiver clicking the banner stays silent.
 
 ### URL = source of truth
 
@@ -46,15 +59,15 @@ Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `genera
 - **PNG → WebP transcode at cache time** via `cacheWillUpdate` workbox plugin + `OffscreenCanvas.convertToBlob`. Origin files stay PNG; the user's local cache stores the smaller WebP, so more sheets fit before quota.
 - **`notificationclick` handler** focuses an existing tab and `client.navigate(data.url)` to the embedded room/song URL, or `clients.openWindow` if nothing is open. Deep-links bandmates straight to the song someone just picked.
 
-### Notifications + auto-open
+### Notifications
 
-[src/hooks/useRoomSongAlert.ts](src/hooks/useRoomSongAlert.ts) watches `room.songId` and:
-- Calls `open(song, false)` (no re-broadcast) when `autoOpen=true`.
-- Fires `registration.showNotification` with `data.url = /{roomCode}/{songId}`.
+`autoOpen` (state in store, persisted in localStorage, default `true`) decides whether `useRoomSongAlert` pops the fullscreen sheet on a remote pick. The notification policy is intentionally asymmetric:
+- `autoOpen=true` → notify only when the tab is hidden; the fullscreen takeover is its own feedback.
+- `autoOpen=false` → notify on every pick regardless of visibility; the OS toast is the only signal because the sheet doesn't open.
 
-The hook has **no "first snapshot" guard** — guests joining mid-rehearsal should immediately auto-open whatever the band is currently on. Dedup happens via `lastSongId.current` only.
+Permission is requested on the first `pointerdown`/`keydown` after mount (browsers gate `Notification.requestPermission()` behind a user gesture; calling on mount silently no-ops). The notification uses `registration.showNotification` (with a fallback to `new Notification`) and embeds `data.url = /{roomCode}/{songId}` so the SW's `notificationclick` handler can deep-link straight to the song.
 
-Permission is requested on the first `pointerdown`/`keydown` after mount (browsers gate `Notification.requestPermission()` behind a user gesture; calling on mount silently no-ops).
+The hook has **no "first snapshot" guard** — guests joining mid-rehearsal should immediately auto-open whatever the band is currently on. Dedup happens via `lastSongId.current` + `lastPickerViewing.current` only.
 
 ## iOS / iPad quirks baked into the code
 
@@ -73,5 +86,16 @@ These are deliberate workarounds, not cargo-cult — please don't remove without
 
 - The webapp moved from `webapp/` up to project root — paths in [README.md](README.md) match the current layout but some script docs (`F:\chord\webapp\...`) are stale.
 - `public/songs.json` no longer exists at runtime. The payload is `public/songs.bin` (obfuscated). README still says JSON in places.
-- Components: `RoomControls.tsx` was extracted from `TopBar.tsx` and is now rendered next to `Tabs.tsx` (it owns the room-code badge + randomize button). Install + Share buttons remain in `TopBar.tsx`.
-- Hooks: `useVisibleSongs.ts` (search/filter logic) and `useRoomSongAlert.ts` (auto-open + notifications) — both in `src/hooks/`.
+- Components: `RoomControls.tsx` was extracted from `TopBar.tsx` and is now rendered next to `Tabs.tsx` (it owns the room-code badge + randomize button, with click-outside cancel + clear-input X). Install, Share, and the AutoOpen toggle live in `TopBar.tsx`.
+- Hooks: `useVisibleSongs.ts` (search/filter logic, looks up the active playlist across both `playlists` and `othersPlaylists`) and `useRoomSongAlert.ts` (auto-open + notifications + picker close sync) — both in `src/hooks/`.
+
+## Sync API contract
+
+If you touch [src/lib/firebase.ts](src/lib/firebase.ts), the `RoomSync` interface is:
+- `publishMyPlaylists(clientId, playlists)` — writes my list to `rooms/{code}/playlists/{clientId}` and arms an `onDisconnect.remove()` on that exact node.
+- `removeMyPlaylists(clientId)` — explicit cleanup when switching rooms (the onDisconnect handles tab-close).
+- `subscribePlaylists(cb)` — callback receives `Record<clientId, Playlist[]> | null` (the whole map). Callers split mine vs others.
+- `publish(state)` / `subscribe(cb)` for `rooms/{code}/current` — `RoomState` carries `pickerViewing`.
+- `claimOwner` / `releaseOwner` / `subscribeOwner` — owner is just a pointer; releasing doesn't touch anything else.
+
+The old `publishPlaylists(playlists)` / `subscribePlaylists` returning `Playlist[]` is gone — don't bring it back.

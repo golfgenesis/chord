@@ -19,7 +19,14 @@ export function NowPlaying() {
 
   return (
     <button
-      onClick={() => song && open(song, false)}
+      onClick={() => {
+        if (!song) return;
+        // If I'm the room's picker, re-clicking the banner means "I'm
+        // viewing again" — broadcast so receivers' fullscreen reopens.
+        // If I'm a receiver, opening from the banner is a private action
+        // and shouldn't change room state.
+        open(song, mine);
+      }}
       className={`group relative flex w-full items-center gap-4 overflow-hidden border-b border-line/40 px-5 py-4 text-left transition active:scale-[0.997] sm:py-5 bg-brand-grad-soft`}
     >
       {/* left accent bar */}
