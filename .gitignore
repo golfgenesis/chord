@@ -1,2 +1,19 @@
-# chordtabs
-/chordtabs
+# Bulk data — kept locally, not in repo
+/images
+/data
+/logs
+
+# Local-only
+.env
+.env.local
+*.log
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.suo
+
+# Python
+__pycache__/
+*.pyc
