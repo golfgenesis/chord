@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useApp } from "../store";
 
 // Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
@@ -227,7 +228,11 @@ function InstallButton() {
 }
 
 function IOSInstallSheet({ onClose }: { onClose: () => void }) {
-  return (
+  // Portal to body so the fixed-positioning escapes the TopBar's
+  // backdrop-filter ancestor (CSS spec: backdrop-filter establishes a
+  // containing block for fixed-position descendants, which would otherwise
+  // pin the sheet to the ~80px header instead of the viewport).
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={onClose}
@@ -277,7 +282,8 @@ function IOSInstallSheet({ onClose }: { onClose: () => void }) {
           เข้าใจแล้ว
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
