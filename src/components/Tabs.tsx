@@ -11,14 +11,15 @@ const TABS: { id: Tab; label: string }[] = [
 export function Tabs() {
   const tab = useApp((s) => s.tab);
   const setTab = useApp((s) => s.setTab);
-  // `flex-wrap-reverse` is the trick that makes RoomControls jump ABOVE the
-  // tabs when the row gets too narrow (mobile). Without -reverse, wrapped
-  // items stack below — we'd see Tabs on top, RoomControls below. DOM order
-  // stays `Tabs, RoomControls`; the reverse flips wrap direction so the
-  // second child ends up visually on top when it wraps. On a single row,
-  // `ml-auto` keeps RoomControls right-aligned.
+  // Two tricks at play:
+  //   1. `flex-wrap-reverse` makes RoomControls jump ABOVE the tabs when the
+  //      row gets too narrow — without -reverse, wrapped items go below.
+  //   2. `justify-between` does double duty: on a single row it pushes Tabs
+  //      to the start and RoomControls to the end. When wrapped, each line
+  //      holds one item — and with one item, justify-between collapses to
+  //      "align to start", which left-aligns RoomControls on its own row.
   return (
-    <div className="flex flex-wrap-reverse items-center gap-y-2.5 gap-x-3 border-b border-line/40 px-4 py-3 sm:py-3.5">
+    <div className="flex flex-wrap-reverse items-center justify-between gap-y-2.5 gap-x-3 border-b border-line/40 px-4 py-3 sm:py-3.5">
       <div className="inline-flex shrink-0 rounded-full border border-line/60 bg-bg-soft/70 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]">
         {TABS.map((t) => {
           const active = tab === t.id;
@@ -37,9 +38,7 @@ export function Tabs() {
           );
         })}
       </div>
-      <div className="sm:ml-auto">
-        <RoomControls />
-      </div>
+      <RoomControls />
     </div>
   );
 }
