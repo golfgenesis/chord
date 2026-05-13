@@ -20,6 +20,7 @@ export function useRoomSongAlert() {
   const byId = useApp((s) => s.byId);
   const open = useApp((s) => s.open);
   const autoOpen = useApp((s) => s.autoOpen);
+  const roomCode = useApp((s) => s.roomCode);
 
   // Ask for notification permission as early as possible. Browsers require
   // a user gesture context — calling requestPermission() directly on mount
@@ -87,21 +88,44 @@ export function useRoomSongAlert() {
       (!autoOpen || document.visibilityState !== "visible");
 
     if (shouldNotify) {
-      try {
-        const notif = new Notification("Chord — เพลงใหม่ในห้อง", {
-          body: song.name,
-          icon: "/icon.svg",
-          // Same tag → newest replaces previous; we never stack alerts.
-          tag: "chord-room-song",
-        });
-        notif.onclick = () => {
-          window.focus();
-          notif.close();
-        };
-      } catch {
-        // Some browsers throw if the user revoked permission between the
-        // permission check and the constructor call — silently ignore.
-      }
+      // Build the deep link the user lands on when they tap the notif:
+      // the current room URL. SW's notificationclick handler will either
+      // focus an existing tab or open a new one at this URL.
+      // Deep link straight into the song's fullscreen view — clicking the
+      // notification skips the list and drops the user on the chord sheet
+      // their bandmate just picked.
+      const url = `${window.location.origin}/${roomCode}/${song.id}`;
+      const title = "Chord — เพลงใหม่ในห้อง";
+      const opts: NotificationOptions = {
+        body: song.name,
+        icon: "/icon.svg",
+        badge: "/icon.svg",
+        // Same tag → newest replaces previous; we never stack alerts.
+        tag: "chord-room-song",
+        data: { url },
+      };
+      // Prefer the SW's showNotification because it survives the page being
+      // closed and can re-open the PWA. Fall back to the page-level
+      // Notification constructor on browsers without a registered SW.
+      (async () => {
+        try {
+          if ("serviceWorker" in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) {
+              await reg.showNotification(title, opts);
+              return;
+            }
+          }
+          const notif = new Notification(title, opts);
+          notif.onclick = () => {
+            window.focus();
+            notif.close();
+          };
+        } catch {
+          // Permission revoked between check and call, or browser refused —
+          // silently drop. The in-app NowPlaying banner still updates.
+        }
+      })();
     }
-  }, [room?.songId, room?.pickedBy, clientId, byId, open, autoOpen]);
+  }, [room?.songId, room?.pickedBy, clientId, byId, open, autoOpen, roomCode]);
 }

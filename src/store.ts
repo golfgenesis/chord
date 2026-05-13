@@ -166,7 +166,11 @@ export const useApp = create<State>((set, get) => ({
     // Whichever wins is written back to the URL via history.replaceState so
     // it's always shareable from the address bar.
     let roomCode: string;
-    const urlMatch = window.location.pathname.match(/^\/(\d{6})$/);
+    // URL shape: /<room>            → just the room
+    //            /<room>/<songId>   → room + open this song in fullscreen
+    // (anything else falls through to localStorage / random)
+    const urlMatch = window.location.pathname.match(/^\/(\d{6})(?:\/(\d+))?$/);
+    const urlSongId = urlMatch && urlMatch[2] ? Number(urlMatch[2]) : null;
     // urlForcedRoom: the user landed on this device via a shared link, so
     // their URL choice MUST beat whatever stale roomCode is sitting in this
     // client's Firestore doc from a previous session. Without this, the
@@ -183,11 +187,27 @@ export const useApp = create<State>((set, get) => ({
         saveLocal("roomCode", roomCode);
       }
     }
-    history.replaceState(null, "", `/${roomCode}`);
-    // Back/forward navigation between rooms.
+    // Normalize URL so the address bar matches state — keep songId when
+    // present, otherwise just the room.
+    const initialPath = urlSongId !== null ? `/${roomCode}/${urlSongId}` : `/${roomCode}`;
+    if (window.location.pathname !== initialPath) {
+      history.replaceState(null, "", initialPath);
+    }
+    // Back/forward navigation. Path can change in two dimensions (room
+    // changes, song open/close), so reconcile both against current state.
     window.addEventListener("popstate", () => {
-      const m = window.location.pathname.match(/^\/(\d{6})$/);
-      if (m && m[1] !== get().roomCode) get().setRoomCode(m[1]);
+      const m = window.location.pathname.match(/^\/(\d{6})(?:\/(\d+))?$/);
+      if (!m) return;
+      const nextRoom = m[1];
+      const nextSongId = m[2] ? Number(m[2]) : null;
+      if (nextRoom !== get().roomCode) get().setRoomCode(nextRoom);
+      const cur = get().viewing;
+      if (nextSongId === null && cur) {
+        set({ viewing: null });
+      } else if (nextSongId !== null && (!cur || cur.id !== nextSongId)) {
+        const song = get().byId.get(nextSongId);
+        if (song) set({ viewing: song });
+      }
     });
     const invertImages = loadLocal<boolean>("invertImages", false);
     const autoOpen = loadLocal<boolean>("autoOpen", true);
@@ -225,6 +245,14 @@ export const useApp = create<State>((set, get) => ({
       byId,
       loaded: true,
     });
+
+    // If the URL pointed at a specific song, open the fullscreen view now
+    // that we have the dataset. Local-only — don't re-broadcast to the room
+    // (the room owner already broadcast it; we're just deep-linking in).
+    if (urlSongId !== null) {
+      const song = byId.get(urlSongId);
+      if (song) set({ viewing: song });
+    }
 
     // Wait for the Firebase chunk before wiring up room sync / cloud sync.
     // The UI is already usable at this point — these add multi-device features.
@@ -380,10 +408,14 @@ export const useApp = create<State>((set, get) => ({
     });
 
     saveLocal("roomCode", code);
-    // Keep the URL in sync so the address bar is always shareable. We use
-    // pushState (not replaceState) so back/forward walks through prior rooms.
-    if (window.location.pathname !== `/${code}`) {
-      history.pushState(null, "", `/${code}`);
+    // Keep the URL in sync so the address bar is always shareable. Preserve
+    // the currently-open song (if any) so swapping rooms while in fullscreen
+    // doesn't drop the songId from the path. pushState (not replace) lets
+    // back/forward walk through prior rooms.
+    const viewing = get().viewing;
+    const nextPath = viewing ? `/${code}/${viewing.id}` : `/${code}`;
+    if (window.location.pathname !== nextPath) {
+      history.pushState(null, "", nextPath);
     }
     if (pushToCloud) csMod?.pushUpdate({ roomCode: code });
     set({
@@ -411,6 +443,12 @@ export const useApp = create<State>((set, get) => ({
     set({ latest: cur });
     saveJSON("latest", cur);
     csMod?.pushUpdate({ latest: cur });
+    // Reflect the open song in the URL so deep-links / refresh / shared
+    // notifications all land back on this exact view.
+    const roomPath = `/${get().roomCode}/${song.id}`;
+    if (window.location.pathname !== roomPath) {
+      history.pushState(null, "", roomPath);
+    }
     // broadcast to room
     if (broadcast) {
       const sync = get().sync;
@@ -424,7 +462,14 @@ export const useApp = create<State>((set, get) => ({
     }
   },
 
-  close: () => set({ viewing: null }),
+  close() {
+    set({ viewing: null });
+    // Strip the songId segment back off the URL when fullscreen closes.
+    const roomPath = `/${get().roomCode}`;
+    if (window.location.pathname !== roomPath) {
+      history.pushState(null, "", roomPath);
+    }
+  },
 
   toggleFavorite(id) {
     const f = new Set(get().favorites);

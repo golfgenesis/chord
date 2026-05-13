@@ -123,3 +123,39 @@ registerRoute(
 self.addEventListener("message", (e) => {
   if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
+
+// 6) Notification click — bring the right tab forward, or open a fresh one --
+// When a bandmate picks a song the page (or SW) fires a notification with a
+// `data.url` pointing at the current room. Clicking the OS notification
+// should land the user on that exact room URL: focus an existing client if
+// one is open, otherwise launch the PWA / open a new tab at that URL.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data as { url?: string } | undefined)?.url || "/";
+  event.waitUntil(
+    (async () => {
+      const clientList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      // Prefer a client already on the same origin — focus it and, if its
+      // URL differs from `target`, navigate it there. This avoids opening
+      // a duplicate tab when one already exists.
+      for (const client of clientList) {
+        try {
+          const url = new URL(client.url);
+          if (url.origin !== self.location.origin) continue;
+          await client.focus();
+          if (url.pathname !== new URL(target, self.location.origin).pathname) {
+            await client.navigate(target).catch(() => {});
+          }
+          return;
+        } catch {
+          // continue trying other clients
+        }
+      }
+      // Nothing open — let the OS launch the PWA / a new tab at target.
+      await self.clients.openWindow(target);
+    })(),
+  );
+});
