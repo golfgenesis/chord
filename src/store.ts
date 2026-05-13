@@ -421,15 +421,6 @@ export const useApp = create<State>((set, get) => ({
         pickedBy: clientId,
         pickedAt: Date.now(),
       });
-      // Opportunistic permission ask — `open` here runs under a real user
-      // gesture (tap on a song row), which is exactly the context browsers
-      // need to show the permission prompt. The prompt only appears when
-      // permission is still "default" (i.e. never asked or never decided).
-      // Auto-opens triggered by remote room updates skip this branch
-      // because they pass broadcast=false.
-      if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission().catch(() => {});
-      }
     }
   },
 

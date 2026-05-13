@@ -21,6 +21,26 @@ export function useRoomSongAlert() {
   const open = useApp((s) => s.open);
   const autoOpen = useApp((s) => s.autoOpen);
 
+  // Ask for notification permission as early as possible. Browsers require
+  // a user gesture context — calling requestPermission() directly on mount
+  // is silently rejected. So we attach one-shot listeners and fire the
+  // prompt on the very first user interaction (any tap or key press).
+  useEffect(() => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    function ask() {
+      Notification.requestPermission().catch(() => {});
+      document.removeEventListener("pointerdown", ask);
+      document.removeEventListener("keydown", ask);
+    }
+    document.addEventListener("pointerdown", ask, { once: true });
+    document.addEventListener("keydown", ask, { once: true });
+    return () => {
+      document.removeEventListener("pointerdown", ask);
+      document.removeEventListener("keydown", ask);
+    };
+  }, []);
+
   // Track the last songId we acted on so we don't re-fire when the same
   // snapshot bounces back (subscription replays, owner re-publishes, etc.).
   const lastSongId = useRef<number | null>(null);
