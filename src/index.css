@@ -7,10 +7,20 @@
   body,
   #root {
     height: 100%;
+  }
+  /* Keep overscroll-bounce off on the OUTER page only. Applying this to
+     #root or body on iOS Safari has caused touch-scroll inside nested
+     overflow containers (Virtuoso list) to stop responding entirely. */
+  html {
     overscroll-behavior: none;
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;
+    /* Explicitly allow vertical scrolling. Without this, iOS Safari will
+       occasionally swallow touch-drag on nested scroll containers when an
+       ancestor has `overflow: hidden` + backdrop-filter + safe-area insets,
+       which is exactly our layout. */
+    touch-action: pan-y;
     /* Inter alternates that read closer to SF Pro */
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
     -webkit-font-smoothing: antialiased;

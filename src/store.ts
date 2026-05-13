@@ -186,7 +186,7 @@ export const useApp = create<State>((set, get) => ({
       const m = window.location.pathname.match(/^\/(\d{6})$/);
       if (m && m[1] !== get().roomCode) get().setRoomCode(m[1]);
     });
-    const invertImages = loadLocal<boolean>("invertImages", true);
+    const invertImages = loadLocal<boolean>("invertImages", false);
     set({ invertImages });
 
     // Kick off heavy work in parallel: the songs dataset, the Firebase chunk,

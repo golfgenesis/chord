@@ -124,12 +124,10 @@ export function Fullscreen() {
             loaded ? "opacity-100" : "opacity-0"
           }`}
           style={{
-            // Invert pushes anti-aliased gray edges hard toward pure white/
-            // black for dark-mode legibility. Non-invert mode shows the chord
-            // sheet as-is (watermark and all) — the user prefers the original.
-            filter: invertImages
-              ? "invert(1) hue-rotate(180deg) contrast(1.7) brightness(1.1) saturate(0.7)"
-              : undefined,
+            // Plain invert — flips white paper → black + black ink → white.
+            // No contrast/hue-rotate/saturation tweaks; those over-processed
+            // the image and the user prefers the straight inversion.
+            filter: invertImages ? "invert(1)" : undefined,
             imageRendering: "auto",
           }}
         />

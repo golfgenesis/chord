@@ -92,6 +92,10 @@ export function SongList() {
         ref={virtuosoRef}
         data={songs}
         className="flex-1 scrollbar-thin"
+        // Explicit touch-action so iOS Safari knows this region is meant for
+        // vertical scrolling — without it the nested overflow container can
+        // become unresponsive to drag-pan on iPhone/iPad.
+        style={{ touchAction: "pan-y" }}
         itemContent={(_i, song) => <Row song={song} />}
         computeItemKey={(_i, song) => song.id}
         increaseViewportBy={400}
