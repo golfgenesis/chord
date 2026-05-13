@@ -165,10 +165,17 @@ function InstallButton() {
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as { standalone?: boolean }).standalone === true,
   );
-  const [isIOS] = useState(
-    () =>
-      /iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window),
-  );
+  const [isIOS] = useState(() => {
+    // Since iOS 13, iPad Safari reports its user agent as desktop Mac (Apple
+    // calls this "request desktop site by default"). So the legacy regex
+    // misses iPads. Catch the new shape by combining the Mac UA with
+    // touch-point support — desktop Macs have 0 touch points, iPads have 5.
+    const ua = navigator.userAgent;
+    if (/iPhone|iPod/.test(ua)) return true;
+    if (/iPad/.test(ua)) return true;
+    if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return true;
+    return false;
+  });
   const [showIOSSheet, setShowIOSSheet] = useState(false);
 
   useEffect(() => {

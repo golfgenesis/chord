@@ -25,6 +25,15 @@ export function Fullscreen() {
   // chrome doesn't accidentally zoom on iPad. But chord sheets NEED pinch-
   // zoom for legibility, so we temporarily swap the meta while fullscreen
   // is open and restore it on close.
+  //
+  // iOS quirk: if the user pinches in fullscreen, iOS preserves the zoom
+  // level across viewport-meta changes — so restoring `user-scalable=no`
+  // alone doesn't zoom out, and the list page ends up "stuck" zoomed, with
+  // touch-drag panning instead of scrolling. The fix is to first force a
+  // zoom-locked meta (`maximum-scale=1.0`, distinct from the original by
+  // including `initial-scale=1.0`), which makes iOS re-evaluate and snap
+  // back to 1.0, then put the original meta back so future fullscreen
+  // opens still find their starting state.
   useEffect(() => {
     if (!song) return;
     const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
@@ -33,7 +42,12 @@ export function Fullscreen() {
     meta.content =
       "width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0, user-scalable=yes";
     return () => {
-      meta.content = original;
+      meta.content =
+        "width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no";
+      // Restore in the next frame so iOS commits the zoom-reset first.
+      requestAnimationFrame(() => {
+        meta.content = original;
+      });
     };
   }, [song]);
 
