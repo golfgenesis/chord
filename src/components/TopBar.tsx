@@ -1,74 +1,32 @@
-import { useState } from "react";
-import { useApp, useIsRoomOwner } from "../store";
+import { useEffect, useState } from "react";
+import { useApp } from "../store";
+
+// Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
 
 export function TopBar() {
   const query = useApp((s) => s.query);
   const setQuery = useApp((s) => s.setQuery);
   const roomCode = useApp((s) => s.roomCode);
-  const setRoomCode = useApp((s) => s.setRoomCode);
-  const randomizeRoom = useApp((s) => s.randomizeRoom);
-  const isOwner = useIsRoomOwner();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(roomCode);
-
-  function commitRoom() {
-    if (/^\d{6}$/.test(draft)) setRoomCode(draft);
-    else setDraft(roomCode);
-    setEditing(false);
-  }
-  function cancelRoom() {
-    setDraft(roomCode);
-    setEditing(false);
-  }
 
   return (
     <header
       className="sticky top-0 z-30 glass-strong hairline-grad"
       style={{ paddingTop: "var(--safe-top)" }}
     >
-      {/* On mobile we wrap into two rows so the search input gets the full
-          width of the screen — typing on a too-narrow field with the room
-          controls eating space was painful. `flex-wrap` + explicit `order`
-          values keep desktop on a single row (Brand · Search · Controls)
-          while letting mobile wrap to (Brand · Controls) / (Search). */}
-      <div className="flex flex-wrap items-center gap-2.5 px-4 py-3 sm:flex-nowrap sm:gap-3.5 sm:px-5 sm:py-4">
+      <div className="flex items-center gap-2.5 px-4 py-3 sm:gap-3.5 sm:px-5 sm:py-4">
         <BrandMark />
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:order-3 sm:ml-0">
-          <RoomBadge
-            roomCode={roomCode}
-            isOwner={isOwner}
-            editing={editing}
-            draft={draft}
-            onStartEdit={() => {
-              setDraft(roomCode);
-              setEditing(true);
-            }}
-            onDraftChange={setDraft}
-            onCommit={commitRoom}
-            onCancel={cancelRoom}
-          />
-          {!editing && (
-            <>
-              <IconButton
-                onClick={randomizeRoom}
-                title="สุ่มเลขห้องใหม่"
-                aria-label="Random room"
-              >
-                <RefreshIcon />
-              </IconButton>
-              <ShareButton roomCode={roomCode} />
-            </>
-          )}
-        </div>
-
-        <div className="relative order-last w-full sm:order-2 sm:w-auto sm:flex-1">
+        <div className="relative min-w-0 flex-1">
           <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-[20px] -translate-y-1/2 text-ink-mute" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="ค้นหาเพลง / artist..."
-            className="peer h-[56px] w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-12 pr-11 text-[17px] font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[58px] sm:text-[18px] sm:placeholder:text-base"
+            className="peer h-[52px] w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-12 pr-11 text-[16px] font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[58px] sm:text-[18px] sm:placeholder:text-base"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
@@ -82,6 +40,11 @@ export function TopBar() {
               <XIcon className="size-[18px]" />
             </button>
           )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <InstallButton />
+          <ShareButton roomCode={roomCode} />
         </div>
       </div>
     </header>
@@ -111,107 +74,6 @@ function BrandMark() {
         </span>
       </div>
     </div>
-  );
-}
-
-function RoomBadge({
-  roomCode,
-  isOwner,
-  editing,
-  draft,
-  onStartEdit,
-  onDraftChange,
-  onCommit,
-  onCancel,
-}: {
-  roomCode: string;
-  isOwner: boolean;
-  editing: boolean;
-  draft: string;
-  onStartEdit: () => void;
-  onDraftChange: (s: string) => void;
-  onCommit: () => void;
-  onCancel: () => void;
-}) {
-  const labelRow = (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-ink-mute">
-        Room
-      </span>
-      <span
-        className={`rounded-full px-1.5 py-px text-[8px] font-bold uppercase tracking-[0.14em] ${
-          isOwner
-            ? "bg-brand-grad text-white shadow-glow-sm"
-            : "border border-line/80 bg-bg-soft text-ink-mute"
-        }`}
-      >
-        {isOwner ? "Owner" : "Guest"}
-      </span>
-    </div>
-  );
-
-  if (editing) {
-    return (
-      <div
-        className="flex items-center gap-1.5 rounded-2xl border border-brand/50 bg-bg-card/80 px-3 py-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_0_0_4px_rgba(139,92,246,0.12)] transition"
-        title="แก้เลขห้อง — กด ✓ หรือ Enter เพื่อยืนยัน"
-      >
-        <div className="flex flex-col">
-          {labelRow}
-          <input
-            autoFocus
-            inputMode="numeric"
-            pattern="\d{6}"
-            maxLength={6}
-            value={draft}
-            onChange={(e) =>
-              onDraftChange(e.target.value.replace(/\D/g, "").slice(0, 6))
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onCommit();
-              else if (e.key === "Escape") onCancel();
-            }}
-            className="block w-[5.5rem] bg-transparent font-mono text-[15px] font-semibold tracking-[0.2em] text-ink outline-none sm:text-base"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="grid size-8 shrink-0 place-items-center rounded-xl border border-line/80 bg-bg-soft/60 text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-95"
-          title="ยกเลิก (Esc)"
-          aria-label="ยกเลิก"
-        >
-          <XIcon className="size-4" />
-        </button>
-        <button
-          type="button"
-          onClick={onCommit}
-          disabled={!/^\d{6}$/.test(draft)}
-          className="grid size-8 shrink-0 place-items-center rounded-xl bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/10 transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-          title="ยืนยัน (Enter)"
-          aria-label="ยืนยัน"
-        >
-          <CheckIcon className="size-[18px]" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      onClick={onStartEdit}
-      className="group relative rounded-2xl border border-line/70 bg-bg-card/60 px-3.5 py-2 text-left shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/60 hover:bg-bg-hover active:scale-[0.98]"
-      title={
-        isOwner
-          ? "คุณเป็นเจ้าของห้องนี้ · แตะเพื่อแก้เลขห้อง"
-          : "คุณเป็นผู้เข้าร่วม · แตะเพื่อแก้เลขห้อง"
-      }
-    >
-      {labelRow}
-      <span className="block font-mono text-base font-semibold tracking-[0.22em] text-ink sm:text-[17px]">
-        {roomCode}
-      </span>
-    </button>
   );
 }
 
@@ -287,6 +149,171 @@ function CheckIcon({ className = "" }: { className?: string }) {
   );
 }
 
+function InstallButton() {
+  // Two distinct install flows:
+  //   - Chrome / Edge / Android — the browser fires `beforeinstallprompt`,
+  //     we stash it, and a tap calls .prompt() to show the native dialog.
+  //   - iOS Safari — no programmatic install API exists. We detect it and
+  //     show a small instruction sheet (the user has to use Safari's own
+  //     Share → Add to Home Screen menu).
+  // If already installed (running as PWA), we hide the button entirely.
+  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
+  // Lazy initializers — these are synchronous browser checks, not external
+  // subscriptions, so they belong in render init rather than an effect.
+  const [hidden, setHidden] = useState(
+    () =>
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (navigator as { standalone?: boolean }).standalone === true,
+  );
+  const [isIOS] = useState(
+    () =>
+      /iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window),
+  );
+  const [showIOSSheet, setShowIOSSheet] = useState(false);
+
+  useEffect(() => {
+    if (hidden) return;
+    function onPrompt(e: Event) {
+      e.preventDefault();
+      setDeferred(e as BeforeInstallPromptEvent);
+    }
+    function onInstalled() {
+      setHidden(true);
+      setDeferred(null);
+    }
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, [hidden]);
+
+  if (hidden) return null;
+  // Chrome on desktop without PWA criteria met → hide silently. Only show
+  // when we actually have something useful to do.
+  if (!deferred && !isIOS) return null;
+
+  async function install() {
+    if (deferred) {
+      await deferred.prompt();
+      const { outcome } = await deferred.userChoice;
+      if (outcome === "accepted") setHidden(true);
+      setDeferred(null);
+      return;
+    }
+    if (isIOS) setShowIOSSheet(true);
+  }
+
+  return (
+    <>
+      <IconButton
+        onClick={install}
+        title="เพิ่มลงหน้าจอหลัก"
+        aria-label="Install app"
+      >
+        <InstallIcon />
+      </IconButton>
+      {showIOSSheet && <IOSInstallSheet onClose={() => setShowIOSSheet(false)} />}
+    </>
+  );
+}
+
+function IOSInstallSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex animate-fade-in items-end bg-black/60 backdrop-blur-sm sm:items-center sm:justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="glass-strong w-full max-w-md rounded-t-3xl border-t border-white/10 p-6 pb-[calc(1.5rem+var(--safe-bottom))] animate-slide-up sm:rounded-3xl sm:border"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-5 h-1.5 w-10 rounded-full bg-white/20 sm:hidden" />
+        <div className="mb-4 flex items-center gap-3">
+          <div className="grid size-11 place-items-center rounded-2xl bg-brand-grad shadow-glow-sm ring-1 ring-white/10">
+            <InstallIcon className="size-5 text-white" />
+          </div>
+          <h3 className="font-display text-[19px] font-semibold leading-[1.4] tracking-tight text-ink">
+            เพิ่มลงหน้าจอหลัก
+          </h3>
+        </div>
+        <ol className="space-y-3.5 text-[15px] leading-[1.55] text-ink-dim">
+          <li className="flex gap-3">
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-bg-soft text-[12px] font-bold text-brand">
+              1
+            </span>
+            <span className="flex flex-wrap items-center gap-1.5">
+              แตะปุ่มแชร์
+              <span className="inline-grid size-7 place-items-center rounded-md border border-line/80 bg-bg-card text-ink-dim">
+                <SafariShareIcon />
+              </span>
+              ในแถบล่างของ Safari
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-bg-soft text-[12px] font-bold text-brand">
+              2
+            </span>
+            <span>เลื่อนหา <span className="text-ink">"Add to Home Screen"</span></span>
+          </li>
+          <li className="flex gap-3">
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-bg-soft text-[12px] font-bold text-brand">
+              3
+            </span>
+            <span>แตะ <span className="text-ink">"Add"</span> มุมขวาบน</span>
+          </li>
+        </ol>
+        <button
+          onClick={onClose}
+          className="mt-6 w-full rounded-2xl bg-brand-grad py-3 text-[15px] font-semibold tracking-tight text-white shadow-glow-sm ring-1 ring-white/10 transition hover:brightness-110 active:scale-[0.98]"
+        >
+          เข้าใจแล้ว
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InstallIcon({ className = "size-[18px]" }: { className?: string }) {
+  // Phone outline with a download arrow inside — communicates "add app to
+  // device" more clearly than a generic + or download glyph.
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="6" y="2.5" width="12" height="19" rx="2.5" />
+      <path d="M12 8v7" />
+      <path d="m9 12 3 3 3-3" />
+    </svg>
+  );
+}
+
+function SafariShareIcon() {
+  // Mini replica of iOS's share glyph so users recognize it visually.
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-4"
+    >
+      <path d="M12 3v12" />
+      <path d="m8 7 4-4 4 4" />
+      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
+    </svg>
+  );
+}
+
 function ShareButton({ roomCode }: { roomCode: string }) {
   // After a successful copy, flash a check mark for a moment so the user
   // gets visual feedback even when the native share sheet didn't open
@@ -346,23 +373,6 @@ function ShareIcon() {
       <path d="M12 3v12" />
       <path d="m8 7 4-4 4 4" />
       <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
-    </svg>
-  );
-}
-
-function RefreshIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-      <path d="M3 3v5h5" />
     </svg>
   );
 }
