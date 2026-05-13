@@ -229,14 +229,13 @@ function InstallButton() {
 function IOSInstallSheet({ onClose }: { onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex animate-fade-in items-end bg-black/60 backdrop-blur-sm sm:items-center sm:justify-center"
+      className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="glass-strong w-full max-w-md rounded-t-3xl border-t border-white/10 p-6 pb-[calc(1.5rem+var(--safe-bottom))] animate-slide-up sm:rounded-3xl sm:border"
+        className="glass-strong w-full max-w-md animate-slide-up rounded-3xl border border-white/10 p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mx-auto mb-5 h-1.5 w-10 rounded-full bg-white/20 sm:hidden" />
         <div className="mb-4 flex items-center gap-3">
           <div className="grid size-11 place-items-center rounded-2xl bg-brand-grad shadow-glow-sm ring-1 ring-white/10">
             <InstallIcon className="size-5 text-white" />
