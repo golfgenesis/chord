@@ -1,6 +1,6 @@
 # Publishes whatever is currently in F:\chord\ to production:
-#   1) Rebuilds webapp/public/songs.json from data/results.json
-#   2) Commits and pushes the webapp repo (Cloudflare Pages auto-deploys)
+#   1) Rebuilds public/songs.json from data/results.json
+#   2) Commits and pushes the repo (Cloudflare Pages auto-deploys)
 #   3) Uploads new images to R2 (rclone copy - skips files already there)
 #
 # Usage:
@@ -21,10 +21,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$WebappDir   = Join-Path $ProjectRoot "webapp"
 $DataFile    = Join-Path $ProjectRoot "data\results.json"
 $ImagesDir   = Join-Path $ProjectRoot "images"
-$SongsJson   = Join-Path $WebappDir   "public\songs.json"
+$SongsJson   = Join-Path $ProjectRoot "public\songs.json"
 $R2_REMOTE   = "r2:chord-images"
 
 function Write-Header($text) {
@@ -44,7 +43,6 @@ if ($DryRun) { Write-Note "DRY RUN - nothing will actually change" }
 
 # preflight
 if (-not (Test-Path $DataFile))  { Write-Fail ("Missing {0}" -f $DataFile) }
-if (-not (Test-Path $WebappDir)) { Write-Fail ("Missing {0}" -f $WebappDir) }
 if (-not $SkipImages -and -not (Test-Path $ImagesDir)) {
     Write-Fail ("Missing {0} (use -SkipImages to skip image upload)" -f $ImagesDir)
 }
@@ -60,9 +58,9 @@ if (-not $SkipPush -and -not (Get-Command git -ErrorAction SilentlyContinue)) {
 # 1. rebuild songs.json
 Write-Step 1 3 "Rebuilding songs.json"
 if ($DryRun) {
-    Write-Note ("would run: npm run data  (in {0})" -f $WebappDir)
+    Write-Note ("would run: npm run data  (in {0})" -f $ProjectRoot)
 } else {
-    Push-Location $WebappDir
+    Push-Location $ProjectRoot
     try {
         $beforeSize = if (Test-Path $SongsJson) { (Get-Item $SongsJson).Length } else { 0 }
         npm run data
@@ -83,7 +81,7 @@ Write-Step 2 3 "Git commit and push"
 if ($SkipPush) {
     Write-Note "skipped (-SkipPush)"
 } else {
-    Push-Location $WebappDir
+    Push-Location $ProjectRoot
     try {
         if ($DryRun) {
             git status --short

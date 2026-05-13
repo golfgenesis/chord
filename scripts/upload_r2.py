@@ -83,14 +83,23 @@ if not to_upload:
 
 
 # ---- Upload -----------------------------------------------------------------
+CONTENT_TYPES = {
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
+
 def upload(p: Path) -> tuple[str, str | None]:
+    content_type = CONTENT_TYPES.get(p.suffix.lower(), "application/octet-stream")
     try:
         s3.upload_file(
             str(p),
             BUCKET,
             p.name,
             ExtraArgs={
-                "ContentType": "image/png",
+                "ContentType": content_type,
                 "CacheControl": CACHE_CONTROL,
             },
         )

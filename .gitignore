@@ -8,11 +8,25 @@
 .env.local
 *.log
 
+# Node / web build
+node_modules
+dist
+dist-ssr
+*.local
+npm-debug.log*
+
+# public/songs.json IS committed — it's the slim dataset Pages serves.
+
 # Editor / OS
 .DS_Store
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 .idea/
 *.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # Python
 __pycache__/
