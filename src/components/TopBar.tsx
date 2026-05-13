@@ -26,32 +26,15 @@ export function TopBar() {
       className="sticky top-0 z-30 glass-strong hairline-grad"
       style={{ paddingTop: "var(--safe-top)" }}
     >
-      <div className="flex items-center gap-2.5 px-4 py-3 sm:gap-3.5 sm:px-5 sm:py-4">
+      {/* On mobile we wrap into two rows so the search input gets the full
+          width of the screen — typing on a too-narrow field with the room
+          controls eating space was painful. `flex-wrap` + explicit `order`
+          values keep desktop on a single row (Brand · Search · Controls)
+          while letting mobile wrap to (Brand · Controls) / (Search). */}
+      <div className="flex flex-wrap items-center gap-2.5 px-4 py-3 sm:flex-nowrap sm:gap-3.5 sm:px-5 sm:py-4">
         <BrandMark />
 
-        <div className="relative flex-1">
-          <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-ink-mute" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="ค้นหาเพลง / artist..."
-            className="peer h-12 w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-11 pr-10 text-base font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[52px] sm:text-[17px] sm:placeholder:text-[15px]"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-          />
-          {query && (
-            <button
-              onClick={() => setQuery("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
-              aria-label="Clear"
-            >
-              <XIcon className="size-4" />
-            </button>
-          )}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:order-3 sm:ml-0">
           <RoomBadge
             roomCode={roomCode}
             isOwner={isOwner}
@@ -76,6 +59,28 @@ export function TopBar() {
               </IconButton>
               <FullscreenButton />
             </>
+          )}
+        </div>
+
+        <div className="relative order-last w-full sm:order-2 sm:w-auto sm:flex-1">
+          <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-[20px] -translate-y-1/2 text-ink-mute" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ค้นหาเพลง / artist..."
+            className="peer h-[56px] w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-12 pr-11 text-[17px] font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[58px] sm:text-[18px] sm:placeholder:text-base"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-2 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
+              aria-label="Clear"
+            >
+              <XIcon className="size-[18px]" />
+            </button>
           )}
         </div>
       </div>
