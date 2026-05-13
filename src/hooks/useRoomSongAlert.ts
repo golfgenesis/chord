@@ -9,10 +9,10 @@ import { useApp } from "../store";
  *      the user has the app permitted to show OS-level pop-ups).
  *
  * Picks made by the local client are ignored — they already opened the
- * sheet themselves and don't need to be notified about their own action.
- * The very first room snapshot after page load is also ignored, otherwise
- * users would get a notification for the song that was already showing
- * when they joined.
+ * sheet themselves. A song that was already in the room when the user
+ * joined IS treated as a real "open this" event so that a guest who joins
+ * mid-rehearsal immediately lands on whatever the band is currently
+ * playing, instead of having to wait for the next pick.
  */
 export function useRoomSongAlert() {
   const room = useApp((s) => s.room);
@@ -44,18 +44,17 @@ export function useRoomSongAlert() {
 
   // Track the last songId we acted on so we don't re-fire when the same
   // snapshot bounces back (subscription replays, owner re-publishes, etc.).
+  // Crucially we DON'T have a separate "first snapshot" guard — the user
+  // expects a freshly-joined guest to see the song currently playing in
+  // the room, not have to wait for the band leader to pick a second song
+  // before auto-open kicks in.
   const lastSongId = useRef<number | null>(null);
-  // Treat the first snapshot as the room's pre-existing state, not a
-  // "someone just picked a song" event.
-  const isInitial = useRef(true);
 
   useEffect(() => {
     const songId = room?.songId;
-    if (!songId) return;
-
-    if (isInitial.current) {
-      isInitial.current = false;
-      lastSongId.current = songId;
+    if (!songId) {
+      // Room cleared — reset so the next non-null id is treated as new.
+      lastSongId.current = null;
       return;
     }
 
