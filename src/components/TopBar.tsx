@@ -45,6 +45,7 @@ export function TopBar() {
 
         <div className="flex shrink-0 items-center gap-1.5">
           <InstallButton />
+          <AutoOpenButton />
           <ShareButton roomCode={roomCode} />
         </div>
       </div>
@@ -146,6 +147,70 @@ function CheckIcon({ className = "" }: { className?: string }) {
       className={className}
     >
       <path d="M5 12.5 10 17.5 19 7.5" />
+    </svg>
+  );
+}
+
+function AutoOpenButton() {
+  // When ON (default), a bandmate picking a song auto-pops the fullscreen
+  // chord sheet on this device. When OFF, the NowPlaying banner still
+  // updates but nothing takes over the screen — useful when you want to
+  // keep browsing the list while someone else is leading.
+  const autoOpen = useApp((s) => s.autoOpen);
+  const toggle = useApp((s) => s.toggleAutoOpen);
+  return (
+    <button
+      onClick={toggle}
+      className={`grid size-10 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition active:scale-95 ${
+        autoOpen
+          ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
+          : "border-line/70 bg-bg-card/60 text-ink-dim hover:border-brand/40 hover:bg-bg-hover hover:text-ink"
+      }`}
+      title={
+        autoOpen
+          ? "เปิด: เด้งดูเพลงตามวงโดยอัตโนมัติ — แตะเพื่อปิด"
+          : "ปิด: ต้องแตะเพลงเองเพื่อดู — แตะเพื่อเปิดใหม่"
+      }
+      aria-label={autoOpen ? "Auto-open is on" : "Auto-open is off"}
+      aria-pressed={autoOpen}
+    >
+      {autoOpen ? <EyeIcon /> : <EyeOffIcon />}
+    </button>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-[18px]"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-[18px]"
+    >
+      <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" y1="2" x2="22" y2="22" />
     </svg>
   );
 }

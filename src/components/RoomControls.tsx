@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp, useIsRoomOwner } from "../store";
 
 /**
@@ -89,9 +89,33 @@ function RoomBadge({
     </div>
   );
 
+  // Click-outside cancels editing (same effect as pressing Escape). We use
+  // `pointerdown` so the cancel happens before any click on the outside
+  // element fires — that way users can immediately interact with whatever
+  // they tapped on, without an intermediate "swallowed" click. Listener
+  // is only registered while editing. `onCancelRef` keeps the effect from
+  // re-binding every render just because the callback identity changed.
+  const editRef = useRef<HTMLDivElement>(null);
+  const onCancelRef = useRef(onCancel);
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
+  useEffect(() => {
+    if (!editing) return;
+    function handle(e: PointerEvent) {
+      const node = editRef.current;
+      if (node && e.target instanceof Node && !node.contains(e.target)) {
+        onCancelRef.current();
+      }
+    }
+    document.addEventListener("pointerdown", handle);
+    return () => document.removeEventListener("pointerdown", handle);
+  }, [editing]);
+
   if (editing) {
     return (
       <div
+        ref={editRef}
         className="flex items-center gap-1.5 rounded-2xl border border-brand/50 bg-bg-card/80 px-3 py-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_0_0_4px_rgba(139,92,246,0.12)] transition"
         title="แก้เลขห้อง — กด ✓ หรือ Enter เพื่อยืนยัน"
       >
@@ -99,6 +123,7 @@ function RoomBadge({
           {labelRow}
           <input
             autoFocus
+            type="tel"
             inputMode="numeric"
             pattern="\d{6}"
             maxLength={6}
@@ -115,10 +140,11 @@ function RoomBadge({
         </div>
         <button
           type="button"
-          onClick={onCancel}
-          className="grid size-8 shrink-0 place-items-center rounded-xl border border-line/80 bg-bg-soft/60 text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-95"
-          title="ยกเลิก (Esc)"
-          aria-label="ยกเลิก"
+          onClick={() => onDraftChange("")}
+          disabled={draft.length === 0}
+          className="grid size-8 shrink-0 place-items-center rounded-xl border border-line/80 bg-bg-soft/60 text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title="ล้างค่า"
+          aria-label="ล้างค่า"
         >
           <XIcon className="size-4" />
         </button>

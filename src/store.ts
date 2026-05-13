@@ -88,6 +88,7 @@ interface State {
   viewing: Song | null; // fullscreen image
   activePlaylistId: string | null;
   invertImages: boolean; // dark-mode chord sheets (CSS filter invert)
+  autoOpen: boolean; // auto-open fullscreen when a bandmate picks a song
 
   // identity / room
   clientId: string;
@@ -121,6 +122,7 @@ interface State {
   deletePlaylist: (id: string) => void;
   setActivePlaylist: (id: string | null) => void;
   toggleInvertImages: () => void;
+  toggleAutoOpen: () => void;
 }
 
 export const useApp = create<State>((set, get) => ({
@@ -134,6 +136,7 @@ export const useApp = create<State>((set, get) => ({
   viewing: null,
   activePlaylistId: null,
   invertImages: false,
+  autoOpen: true,
 
   clientId: "",
   roomCode: "",
@@ -187,7 +190,8 @@ export const useApp = create<State>((set, get) => ({
       if (m && m[1] !== get().roomCode) get().setRoomCode(m[1]);
     });
     const invertImages = loadLocal<boolean>("invertImages", false);
-    set({ invertImages });
+    const autoOpen = loadLocal<boolean>("autoOpen", true);
+    set({ invertImages, autoOpen });
 
     // Kick off heavy work in parallel: the songs dataset, the Firebase chunk,
     // and the locally-persisted collections. The shell renders as soon as the
@@ -417,6 +421,15 @@ export const useApp = create<State>((set, get) => ({
         pickedBy: clientId,
         pickedAt: Date.now(),
       });
+      // Opportunistic permission ask — `open` here runs under a real user
+      // gesture (tap on a song row), which is exactly the context browsers
+      // need to show the permission prompt. The prompt only appears when
+      // permission is still "default" (i.e. never asked or never decided).
+      // Auto-opens triggered by remote room updates skip this branch
+      // because they pass broadcast=false.
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+      }
     }
   },
 
@@ -502,6 +515,12 @@ export const useApp = create<State>((set, get) => ({
 
   setActivePlaylist(id) {
     set({ activePlaylistId: id });
+  },
+
+  toggleAutoOpen() {
+    const next = !get().autoOpen;
+    set({ autoOpen: next });
+    saveLocal("autoOpen", next);
   },
 
   toggleInvertImages() {

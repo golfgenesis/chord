@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useApp } from "./store";
 import { useVisibleSongs } from "./hooks/useVisibleSongs";
+import { useRoomSongAlert } from "./hooks/useRoomSongAlert";
 import { TopBar } from "./components/TopBar";
 import { NowPlaying } from "./components/NowPlaying";
 import { Tabs } from "./components/Tabs";
@@ -19,6 +20,9 @@ export default function App() {
   useEffect(() => {
     init();
   }, [init]);
+
+  // Auto-open + push notification when a bandmate picks a new song.
+  useRoomSongAlert();
 
   if (!loaded) {
     return (
