@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { useApp } from "../store";
+import { useApp, useIsRoomOwner } from "../store";
 import type { Playlist } from "../types";
 
 export function PlaylistPicker() {
@@ -8,6 +8,7 @@ export function PlaylistPicker() {
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const setActivePlaylist = useApp((s) => s.setActivePlaylist);
   const createPlaylist = useApp((s) => s.createPlaylist);
+  const isOwner = useIsRoomOwner();
   const [creating, setCreating] = useState(false);
 
   const active = playlists.find((p) => p.id === activePlaylistId) ?? null;
@@ -23,16 +24,23 @@ export function PlaylistPicker() {
             onClick={() => setActivePlaylist(p.id)}
           />
         ))}
-        <button
-          onClick={() => setCreating(true)}
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/60 bg-brand-soft px-3.5 py-1.5 text-sm font-medium text-brand transition hover:border-brand hover:bg-brand/15"
-        >
-          <PlusIcon className="size-3.5" />
-          {playlists.length === 0 ? "สร้าง Playlist แรก" : "Playlist ใหม่"}
-        </button>
+        {isOwner && (
+          <button
+            onClick={() => setCreating(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/60 bg-brand-soft px-3.5 py-1.5 text-sm font-medium text-brand transition hover:border-brand hover:bg-brand/15"
+          >
+            <PlusIcon className="size-3.5" />
+            {playlists.length === 0 ? "สร้าง Playlist แรก" : "Playlist ใหม่"}
+          </button>
+        )}
+        {!isOwner && playlists.length === 0 && (
+          <span className="flex shrink-0 items-center rounded-full border border-line bg-bg-soft px-3.5 py-1.5 text-xs text-ink-mute">
+            เจ้าของห้องยังไม่ได้สร้าง Playlist
+          </span>
+        )}
       </div>
 
-      {active && <PlaylistHeader playlist={active} />}
+      {active && <PlaylistHeader playlist={active} isOwner={isOwner} />}
 
       {creating && (
         <CreateSheet
@@ -77,7 +85,13 @@ function PlaylistPill({
   );
 }
 
-function PlaylistHeader({ playlist }: { playlist: Playlist }) {
+function PlaylistHeader({
+  playlist,
+  isOwner,
+}: {
+  playlist: Playlist;
+  isOwner: boolean;
+}) {
   const renamePlaylist = useApp((s) => s.renamePlaylist);
   const deletePlaylist = useApp((s) => s.deletePlaylist);
   const [mode, setMode] = useState<"view" | "rename" | "confirmDelete">("view");
@@ -160,27 +174,32 @@ function PlaylistHeader({ playlist }: { playlist: Playlist }) {
             </h3>
             <p className="text-[11px] uppercase tracking-[0.16em] text-ink-mute">
               {playlist.songIds?.length ?? 0} เพลง
+              {!isOwner && <span className="ml-2 text-ink-mute/80">· read-only</span>}
             </p>
           </div>
-          <button
-            onClick={() => {
-              setDraft(playlist.name);
-              setMode("rename");
-            }}
-            className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-brand/50 hover:bg-bg-hover hover:text-ink"
-            aria-label="แก้ไขชื่อ"
-            title="แก้ไขชื่อ"
-          >
-            <EditIcon />
-          </button>
-          <button
-            onClick={() => setMode("confirmDelete")}
-            className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-danger/50 hover:bg-bg-hover hover:text-danger"
-            aria-label="ลบ Playlist"
-            title="ลบ Playlist"
-          >
-            <TrashIcon />
-          </button>
+          {isOwner && (
+            <>
+              <button
+                onClick={() => {
+                  setDraft(playlist.name);
+                  setMode("rename");
+                }}
+                className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-brand/50 hover:bg-bg-hover hover:text-ink"
+                aria-label="แก้ไขชื่อ"
+                title="แก้ไขชื่อ"
+              >
+                <EditIcon />
+              </button>
+              <button
+                onClick={() => setMode("confirmDelete")}
+                className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-danger/50 hover:bg-bg-hover hover:text-danger"
+                aria-label="ลบ Playlist"
+                title="ลบ Playlist"
+              >
+                <TrashIcon />
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

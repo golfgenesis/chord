@@ -11,6 +11,11 @@ export interface RoomState {
   pickedAt: number | null;
 }
 
+export interface RoomOwner {
+  clientId: string;
+  claimedAt: number;
+}
+
 export interface Playlist {
   id: string;
   name: string;

@@ -28,6 +28,10 @@ function normalizePlaylists(raw: unknown): Playlist[] {
     }));
 }
 
+function isRoomOwner(s: Pick<State, "clientId" | "roomOwnerClientId">): boolean {
+  return Boolean(s.clientId) && s.roomOwnerClientId === s.clientId;
+}
+
 interface State {
   // dataset
   songs: Song[];
@@ -45,8 +49,10 @@ interface State {
   clientId: string;
   roomCode: string;
   room: RoomState | null;
+  roomOwnerClientId: string | null;
   unsubscribeRoom: (() => void) | null;
   unsubscribeRoomPlaylists: (() => void) | null;
+  unsubscribeRoomOwner: (() => void) | null;
   sync: RoomSync | null;
 
   // persisted collections
@@ -85,8 +91,10 @@ export const useApp = create<State>((set, get) => ({
   clientId: "",
   roomCode: "",
   room: null,
+  roomOwnerClientId: null,
   unsubscribeRoom: null,
   unsubscribeRoomPlaylists: null,
+  unsubscribeRoomOwner: null,
   sync: null,
 
   favorites: new Set(),
@@ -172,16 +180,54 @@ export const useApp = create<State>((set, get) => ({
     if (!valid) return;
     if (code === get().roomCode && get().sync) return; // no-op if unchanged
 
+    // Tear down old room. If we were owner of it, release ownership in the DB
+    // so the room becomes claimable again.
     const oldUnsubRoom = get().unsubscribeRoom;
     const oldUnsubPL = get().unsubscribeRoomPlaylists;
+    const oldUnsubOwner = get().unsubscribeRoomOwner;
+    const oldSync = get().sync;
+    const oldOwnerId = get().roomOwnerClientId;
+    const myClientId = get().clientId;
+    if (oldSync && oldOwnerId && oldOwnerId === myClientId) {
+      oldSync.releaseOwner(myClientId).catch(console.error);
+    }
     if (oldUnsubRoom) oldUnsubRoom();
     if (oldUnsubPL) oldUnsubPL();
+    if (oldUnsubOwner) oldUnsubOwner();
 
     const sync = getRoomSync(code);
     const unsub = sync.subscribe((state) => set({ room: state }));
 
-    // Subscribe to the room's playlists. First snapshot decides whether to
-    // adopt remote (room already has data) or seed remote with local.
+    // Subscribe to ownership. On the first snapshot, if the room is unowned,
+    // attempt to claim it — the subscription will fire again with our clientId
+    // (or someone else's, if a race was lost) and we react accordingly.
+    let firstOwnerSnap = true;
+    const unsubOwner = sync.subscribeOwner((owner) => {
+      const prevOwnerId = get().roomOwnerClientId;
+      const nextOwnerId = owner?.clientId ?? null;
+      set({ roomOwnerClientId: nextOwnerId });
+      if (firstOwnerSnap) {
+        firstOwnerSnap = false;
+        if (!owner) {
+          sync.claimOwner(myClientId).catch(console.error);
+        }
+        return;
+      }
+      // On transitioning into ownership, seed the room with our local
+      // playlists. If the room already had playlists, they were adopted by
+      // subscribePlaylists; this just republishes the current state, which is
+      // a no-op.
+      if (nextOwnerId === myClientId && prevOwnerId !== myClientId) {
+        const localPL = get().playlists;
+        if (localPL.length > 0) {
+          sync.publishPlaylists(localPL).catch(console.error);
+        }
+      }
+    });
+
+    // Subscribe to playlists. We always adopt the remote view (the owner is
+    // the source of truth). When the room is empty we wait for ownership to
+    // resolve — the owner-subscription handles seeding above.
     let firstPLSnap = true;
     const unsubPL = sync.subscribePlaylists((remote) => {
       const normalized = normalizePlaylists(remote);
@@ -190,15 +236,9 @@ export const useApp = create<State>((set, get) => ({
         if (normalized.length > 0) {
           set({ playlists: normalized, activePlaylistId: null });
           saveJSON("playlists", normalized);
-        } else {
-          // Empty room. If we have local playlists, seed them up.
-          const localPL = get().playlists;
-          if (localPL.length > 0) {
-            sync.publishPlaylists(localPL).catch(console.error);
-          } else {
-            set({ playlists: [], activePlaylistId: null });
-          }
         }
+        // If empty: leave local playlists untouched for now. If we end up
+        // owning this room, the owner-subscription will publish them.
       } else {
         set((prev) => ({
           playlists: normalized,
@@ -216,7 +256,9 @@ export const useApp = create<State>((set, get) => ({
       sync,
       unsubscribeRoom: unsub,
       unsubscribeRoomPlaylists: unsubPL,
+      unsubscribeRoomOwner: unsubOwner,
       room: null,
+      roomOwnerClientId: null,
     });
   },
 
@@ -258,6 +300,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   addToPlaylist(playlistId, id) {
+    if (!isRoomOwner(get())) return;
     const playlists = get().playlists.map((p) =>
       p.id === playlistId && !p.songIds.includes(id)
         ? { ...p, songIds: [...p.songIds, id] }
@@ -269,6 +312,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   removeFromPlaylist(playlistId, id) {
+    if (!isRoomOwner(get())) return;
     const playlists = get().playlists.map((p) =>
       p.id === playlistId
         ? { ...p, songIds: p.songIds.filter((x) => x !== id) }
@@ -280,6 +324,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   createPlaylist(name) {
+    if (!isRoomOwner(get())) return "";
     const id = Math.random().toString(36).slice(2, 10);
     const p: Playlist = { id, name, songIds: [], createdAt: Date.now() };
     const playlists = [...get().playlists, p];
@@ -290,6 +335,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   renamePlaylist(id, name) {
+    if (!isRoomOwner(get())) return;
     const playlists = get().playlists.map((p) =>
       p.id === id ? { ...p, name } : p,
     );
@@ -299,6 +345,7 @@ export const useApp = create<State>((set, get) => ({
   },
 
   deletePlaylist(id) {
+    if (!isRoomOwner(get())) return;
     const playlists = get().playlists.filter((p) => p.id !== id);
     set({
       playlists,
@@ -313,3 +360,6 @@ export const useApp = create<State>((set, get) => ({
     set({ activePlaylistId: id });
   },
 }));
+
+export const useIsRoomOwner = (): boolean =>
+  useApp((s) => isRoomOwner(s));

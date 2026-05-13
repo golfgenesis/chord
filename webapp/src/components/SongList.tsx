@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Virtuoso } from "react-virtuoso";
-import { useApp } from "../store";
+import { useApp, useIsRoomOwner } from "../store";
 import { useVisibleSongs } from "../hooks/useVisibleSongs";
 import type { Song } from "../types";
 
@@ -60,6 +60,7 @@ function Row({ song }: { song: Song }) {
   const tab = useApp((s) => s.tab);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const removeFromPlaylist = useApp((s) => s.removeFromPlaylist);
+  const isOwner = useIsRoomOwner();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
@@ -93,17 +94,19 @@ function Row({ song }: { song: Song }) {
         </div>
       </div>
 
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setPickerOpen(true);
-        }}
-        className="-m-1.5 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
-        aria-label="Add to playlist"
-      >
-        <PlusIcon />
-      </button>
-      {tab === "playlists" && activePlaylistId && (
+      {isOwner && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setPickerOpen(true);
+          }}
+          className="-m-1.5 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
+          aria-label="Add to playlist"
+        >
+          <PlusIcon />
+        </button>
+      )}
+      {isOwner && tab === "playlists" && activePlaylistId && (
         <button
           onClick={(e) => {
             e.stopPropagation();

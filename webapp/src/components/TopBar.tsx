@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useApp } from "../store";
+import { useApp, useIsRoomOwner } from "../store";
 
 export function TopBar() {
   const query = useApp((s) => s.query);
@@ -7,6 +7,7 @@ export function TopBar() {
   const roomCode = useApp((s) => s.roomCode);
   const setRoomCode = useApp((s) => s.setRoomCode);
   const randomizeRoom = useApp((s) => s.randomizeRoom);
+  const isOwner = useIsRoomOwner();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(roomCode);
 
@@ -49,6 +50,7 @@ export function TopBar() {
         <div className="flex shrink-0 items-center">
           <RoomBadge
             roomCode={roomCode}
+            isOwner={isOwner}
             editing={editing}
             draft={draft}
             onStartEdit={() => {
@@ -97,6 +99,7 @@ function BrandMark() {
 
 function RoomBadge({
   roomCode,
+  isOwner,
   editing,
   draft,
   onStartEdit,
@@ -104,6 +107,7 @@ function RoomBadge({
   onCommit,
 }: {
   roomCode: string;
+  isOwner: boolean;
   editing: boolean;
   draft: string;
   onStartEdit: () => void;
@@ -114,10 +118,21 @@ function RoomBadge({
     <button
       onClick={() => (editing ? onCommit() : onStartEdit())}
       className="group relative rounded-xl border border-line bg-bg-card/70 px-3 py-2 text-left transition hover:border-brand/60 hover:bg-bg-hover"
-      title="แตะเพื่อแก้เลขห้อง"
+      title={isOwner ? "คุณเป็นเจ้าของห้องนี้ · แตะเพื่อแก้เลขห้อง" : "คุณเป็นผู้เข้าร่วม · แตะเพื่อแก้เลขห้อง"}
     >
-      <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-ink-mute group-hover:text-brand">
-        Room
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] font-medium uppercase tracking-[0.18em] text-ink-mute group-hover:text-brand">
+          Room
+        </span>
+        <span
+          className={`rounded-full px-1.5 py-px text-[8px] font-bold uppercase tracking-[0.12em] ${
+            isOwner
+              ? "bg-brand-grad text-white shadow-glow-sm"
+              : "border border-line bg-bg-soft text-ink-mute"
+          }`}
+        >
+          {isOwner ? "Owner" : "Guest"}
+        </span>
       </div>
       {editing ? (
         <input
