@@ -270,19 +270,19 @@ export const useApp = create<State>((set, get) => ({
     const sync = fbMod.getRoomSync(code);
     const unsub = sync.subscribe((state) => set({ room: state }));
 
-    // Subscribe to ownership. On the first snapshot, if the room is unowned,
-    // attempt to claim it — the subscription will fire again with our clientId
-    // (or someone else's, if a race was lost) and we react accordingly.
-    let firstOwnerSnap = true;
+    // Subscribe to ownership. We attempt to claim whenever the room is
+    // unowned — both on the first snapshot of a fresh room AND whenever the
+    // current owner disconnects (their onDisconnect handler wipes the whole
+    // rooms/{code} node, which fires a null snapshot for every remaining
+    // guest). Without re-claiming, everyone would be stuck as Guest forever
+    // after the owner closes their tab. claimOwner uses an RTDB transaction
+    // so racing guests resolve to exactly one winner.
     const unsubOwner = sync.subscribeOwner((owner) => {
       const prevOwnerId = get().roomOwnerClientId;
       const nextOwnerId = owner?.clientId ?? null;
       set({ roomOwnerClientId: nextOwnerId });
-      if (firstOwnerSnap) {
-        firstOwnerSnap = false;
-        if (!owner) {
-          sync.claimOwner(myClientId).catch(console.error);
-        }
+      if (!nextOwnerId) {
+        sync.claimOwner(myClientId).catch(console.error);
         return;
       }
       // On transitioning into ownership, seed the room with our local
@@ -298,8 +298,11 @@ export const useApp = create<State>((set, get) => ({
     });
 
     // Subscribe to playlists. We always adopt the remote view (the owner is
-    // the source of truth). When the room is empty we wait for ownership to
-    // resolve — the owner-subscription handles seeding above.
+    // the source of truth) UNLESS the remote is null/empty — that happens
+    // when the owner disconnects and their onDisconnect wipes the room node.
+    // Treating null as "wipe local" would destroy every guest's playlists
+    // when the owner leaves. Instead we keep local intact; whichever guest
+    // wins the re-claim will republish from their own copy.
     let firstPLSnap = true;
     const unsubPL = sync.subscribePlaylists((remote) => {
       const normalized = normalizePlaylists(remote);
@@ -318,17 +321,20 @@ export const useApp = create<State>((set, get) => ({
         }
         // If empty: leave local playlists untouched for now. If we end up
         // owning this room, the owner-subscription will publish them.
-      } else {
-        set((prev) => ({
-          playlists: normalized,
-          activePlaylistId: resolveActivePlaylistId(
-            normalized,
-            prev.activePlaylistId,
-            prev.tab,
-          ),
-        }));
-        saveJSON("playlists", normalized);
+        return;
       }
+      // Subsequent snapshots: only adopt non-empty payloads. Empty/null means
+      // the room was abandoned and is about to be re-claimed by someone.
+      if (normalized.length === 0) return;
+      set((prev) => ({
+        playlists: normalized,
+        activePlaylistId: resolveActivePlaylistId(
+          normalized,
+          prev.activePlaylistId,
+          prev.tab,
+        ),
+      }));
+      saveJSON("playlists", normalized);
     });
 
     saveLocal("roomCode", code);

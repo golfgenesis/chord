@@ -20,9 +20,7 @@ export function NowPlaying() {
   return (
     <button
       onClick={() => song && open(song, false)}
-      className={`group relative flex w-full items-center gap-4 overflow-hidden border-b border-line/40 px-5 py-4 text-left transition active:scale-[0.997] sm:py-5 ${
-        mine ? "bg-brand-grad-soft" : "bg-bg-soft/50"
-      }`}
+      className={`group relative flex w-full items-center gap-4 overflow-hidden border-b border-line/40 px-5 py-4 text-left transition active:scale-[0.997] sm:py-5 bg-brand-grad-soft`}
     >
       {/* left accent bar */}
       <span
@@ -50,7 +48,7 @@ export function NowPlaying() {
             mine ? "text-brand/90" : "text-cyan/80"
           }`}
         >
-          {mine ? "คุณเลือก" : "นักร้องเลือก"}
+          {mine ? "คุณเลือก" : "เลือกจากผู้เล่นคนอื่น"}
         </div>
         {/* Thai needs ~1.35+ line-height to fit upper tone marks + lower
             vowels; the previous 1.15 clipped them. tracking left looser too —
@@ -69,7 +67,11 @@ export function NowPlaying() {
 
 function PlayIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[18px] translate-x-[1px] sm:size-5">
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="size-[18px] translate-x-[1px] sm:size-5"
+    >
       <path d="M8 5v14l11-7z" />
     </svg>
   );
