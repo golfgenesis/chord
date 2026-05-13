@@ -133,7 +133,7 @@ export const useApp = create<State>((set, get) => ({
   tab: "all",
   viewing: null,
   activePlaylistId: null,
-  invertImages: true,
+  invertImages: false,
 
   clientId: "",
   roomCode: "",

@@ -21,6 +21,22 @@ export function Fullscreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [song, close]);
 
+  // The global viewport meta in index.html sets user-scalable=no so the app
+  // chrome doesn't accidentally zoom on iPad. But chord sheets NEED pinch-
+  // zoom for legibility, so we temporarily swap the meta while fullscreen
+  // is open and restore it on close.
+  useEffect(() => {
+    if (!song) return;
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    if (!meta) return;
+    const original = meta.content;
+    meta.content =
+      "width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0, user-scalable=yes";
+    return () => {
+      meta.content = original;
+    };
+  }, [song]);
+
   if (!song) return null;
 
   return (
@@ -62,7 +78,7 @@ export function Fullscreen() {
           className="rounded-xl border border-white/[0.12] bg-white/[0.06] px-3.5 py-2 text-[14px] font-semibold tracking-[-0.005em] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition hover:border-white/20 hover:bg-white/[0.12] active:scale-95"
           aria-label="Close"
         >
-          เสร็จ
+          ย้อนกลับ
           <span className="ml-2 hidden text-white/40 sm:inline">ESC</span>
         </button>
       </header>
