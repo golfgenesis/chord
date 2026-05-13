@@ -1,25 +1,39 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <!-- Background: deep night-violet top → near-black bottom (vertical, no
+         visible seams) -->
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#221b3a"/>
       <stop offset="1" stop-color="#08060e"/>
     </linearGradient>
+
+    <!-- One soft purple halo from the top, fading out smoothly. A single
+         radial avoids the cross-over artifact two corner orbs created. -->
     <radialGradient id="halo" cx="0.5" cy="0" r="0.95">
       <stop offset="0" stop-color="#a78bfa" stop-opacity="0.30"/>
       <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
     </radialGradient>
+
+    <!-- Brand gradient: violet → pink → amber, vivid mid-tones so it pops
+         against the dark background -->
     <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#a78bfa"/>
       <stop offset="0.55" stop-color="#f472b6"/>
       <stop offset="1" stop-color="#fbbf24"/>
     </linearGradient>
+
+    <!-- iOS-style top gloss: thin highlight at the top fading to transparent
+         well before the midline -->
     <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
       <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
+
+    <!-- Soft outer glow for the glyph -->
     <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
       <feGaussianBlur stdDeviation="14"/>
     </filter>
+
     <clipPath id="clip">
       <rect width="512" height="512" rx="112" ry="112"/>
     </clipPath>
@@ -28,18 +42,26 @@
   <g clip-path="url(#clip)">
     <rect width="512" height="512" fill="url(#bg)"/>
     <rect width="512" height="512" fill="url(#halo)"/>
+
+    <!-- Soft outer glow behind glyph -->
     <g filter="url(#glow)" opacity="0.55" transform="translate(112 112) scale(12)">
       <path d="M9 17V5l12-2v12" fill="none" stroke="url(#brand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="6" cy="17" r="3" fill="url(#brand)"/>
       <circle cx="18" cy="15" r="3" fill="url(#brand)"/>
     </g>
+
+    <!-- Main chord glyph: ~57% of canvas, brand gradient stroke + fills -->
     <g transform="translate(112 112) scale(12)">
       <path d="M9 17V5l12-2v12" fill="none" stroke="url(#brand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       <circle cx="6" cy="17" r="3" fill="url(#brand)"/>
       <circle cx="18" cy="15" r="3" fill="url(#brand)"/>
     </g>
+
+    <!-- Top gloss (drawn last, sits over everything inside the clip) -->
     <rect width="512" height="512" fill="url(#gloss)"/>
   </g>
+
+  <!-- Hairline edge (1px white at 10%) outside the clip for a crisp rim -->
   <rect x="0.5" y="0.5" width="511" height="511" rx="111.5" ry="111.5"
         fill="none" stroke="#ffffff" stroke-opacity="0.10"/>
 </svg>

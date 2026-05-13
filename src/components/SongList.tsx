@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   DndContext,
   closestCenter,
@@ -27,6 +27,18 @@ export function SongList() {
   const query = useApp((s) => s.query);
   const isOwner = useIsRoomOwner();
 
+  // Refs + state for the floating "back to top" button. Virtuoso has its own
+  // imperative scroll API; the sortable branch uses a plain scrollable div.
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const sortableScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  function scrollToTop() {
+    virtuosoRef.current?.scrollToIndex({ index: 0, behavior: "smooth" });
+    sortableScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    setShowScrollTop(false);
+  }
+
   if (tab === "playlists" && !activePlaylistId) {
     return (
       <Empty
@@ -48,47 +60,60 @@ export function SongList() {
       <Empty
         title="ไม่พบเพลง"
         hint={
-          tab === "favorites"
-            ? "กด ★ บนรายการเพื่อปักเก็บ"
-            : "ลองคำค้นอื่น"
+          tab === "favorites" ? "กด ★ บนรายการเพื่อปักเก็บ" : "ลองคำค้นอื่น"
         }
       />
     );
   }
 
   // Owners viewing a playlist with no active search → drag-and-drop reorder.
-  // Guests, search-filtered views, or other tabs use the regular virtualized
-  // list (reordering a filtered subset is ambiguous).
   if (
     tab === "playlists" &&
     activePlaylistId &&
     isOwner &&
     !query.trim()
   ) {
-    return <SortablePlaylist songs={songs} playlistId={activePlaylistId} />;
+    return (
+      <>
+        <SortablePlaylist
+          songs={songs}
+          playlistId={activePlaylistId}
+          scrollRef={sortableScrollRef}
+          onScroll={(e) => setShowScrollTop(e.currentTarget.scrollTop > 0)}
+        />
+        <ScrollTopButton visible={showScrollTop} onClick={scrollToTop} />
+      </>
+    );
   }
 
   return (
-    <Virtuoso
-      data={songs}
-      className="flex-1 scrollbar-thin"
-      itemContent={(_i, song) => <Row song={song} />}
-      computeItemKey={(_i, song) => song.id}
-      increaseViewportBy={400}
-    />
+    <>
+      <Virtuoso
+        ref={virtuosoRef}
+        data={songs}
+        className="flex-1 scrollbar-thin"
+        itemContent={(_i, song) => <Row song={song} />}
+        computeItemKey={(_i, song) => song.id}
+        increaseViewportBy={400}
+        atTopStateChange={(atTop) => setShowScrollTop(!atTop)}
+      />
+      <ScrollTopButton visible={showScrollTop} onClick={scrollToTop} />
+    </>
   );
 }
 
 function SortablePlaylist({
   songs,
   playlistId,
+  scrollRef,
+  onScroll,
 }: {
   songs: Song[];
   playlistId: string;
+  scrollRef?: React.Ref<HTMLDivElement>;
+  onScroll?: React.UIEventHandler<HTMLDivElement>;
 }) {
   const reorderPlaylist = useApp((s) => s.reorderPlaylist);
-  // distance: 5px before drag starts → quick taps on the handle still open
-  // the song; an actual drag intent is required to begin reordering.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -114,6 +139,8 @@ function SortablePlaylist({
         strategy={verticalListSortingStrategy}
       >
         <div
+          ref={scrollRef}
+          onScroll={onScroll}
           className="flex-1 overflow-y-auto scrollbar-thin"
           style={{ paddingBottom: "var(--safe-bottom)" }}
         >
@@ -153,7 +180,7 @@ function SortableRow({ song }: { song: Song }) {
             onClick={(e) => e.stopPropagation()}
             aria-label="ลากเพื่อจัดเรียง"
             title="ลากเพื่อจัดเรียง"
-            className="-m-1.5 shrink-0 cursor-grab rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink active:cursor-grabbing touch-none"
+            className="-m-1 shrink-0 cursor-grab rounded-lg p-1.5 text-ink-mute/70 transition hover:bg-bg-hover hover:text-ink active:cursor-grabbing touch-none"
           >
             <DragHandleIcon />
           </button>
@@ -184,12 +211,12 @@ function Row({
 
   return (
     <div
-      className="group relative mx-2 my-0.5 flex items-center gap-2 overflow-hidden rounded-xl px-2 py-3 transition active:scale-[0.997] hover:bg-bg-card/60"
+      className="group relative mx-3 my-0.5 flex items-center gap-2.5 overflow-hidden rounded-2xl px-3 py-3 transition-all active:scale-[0.997] hover:bg-bg-card/50"
       onClick={() => open(song)}
       role="button"
     >
       {isLatest && (
-        <span className="absolute inset-y-3 left-0 w-[3px] rounded-full bg-brand-grad opacity-80" />
+        <span className="absolute inset-y-3 left-0 w-[3px] rounded-full bg-brand-grad opacity-90" />
       )}
       {dragHandle}
       <button
@@ -197,7 +224,7 @@ function Row({
           e.stopPropagation();
           toggleFavorite(song.id);
         }}
-        className="-m-1.5 shrink-0 rounded-lg p-1.5 transition hover:bg-bg-hover"
+        className="-m-1 shrink-0 rounded-lg p-1.5 transition hover:bg-bg-hover active:scale-90"
         aria-label={isFav ? "Unfavorite" : "Favorite"}
       >
         <StarIcon filled={isFav} />
@@ -205,9 +232,11 @@ function Row({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-base text-ink">{song.name}</span>
+          <span className="truncate text-[15px] font-medium leading-[1.5] tracking-tight text-ink sm:text-[16px]">
+            {song.name}
+          </span>
           {isLatest && (
-            <span className="shrink-0 rounded-full bg-brand-soft px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-brand">
+            <span className="shrink-0 rounded-full bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-brand">
               ล่าสุด
             </span>
           )}
@@ -220,7 +249,7 @@ function Row({
             e.stopPropagation();
             setPickerOpen(true);
           }}
-          className="-m-1.5 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
+          className="-m-1 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink active:scale-90"
           aria-label="Add to playlist"
         >
           <PlusIcon />
@@ -232,7 +261,7 @@ function Row({
             e.stopPropagation();
             removeFromPlaylist(activePlaylistId, song.id);
           }}
-          className="-m-1.5 shrink-0 rounded-lg p-1.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger"
+          className="-m-1 shrink-0 rounded-lg p-1.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger active:scale-90"
           aria-label="Remove from playlist"
         >
           <TrashIcon />
@@ -270,23 +299,28 @@ function AddToPlaylistSheet({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-40 flex items-end bg-black/70 backdrop-blur-sm animate-fade-in sm:items-center sm:justify-center"
+      className="fixed inset-0 z-40 flex items-end bg-black/70 backdrop-blur-md animate-fade-in sm:items-center sm:justify-center"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full rounded-t-3xl border border-line bg-bg-card p-5 shadow-card animate-slide-up sm:max-w-md sm:rounded-2xl"
-        style={{ paddingBottom: "calc(1.25rem + var(--safe-bottom))" }}
+        className="w-full rounded-t-[28px] border border-line/60 bg-bg-card/95 p-6 shadow-card backdrop-blur-2xl animate-slide-up sm:max-w-md sm:rounded-3xl"
+        style={{ paddingBottom: "calc(1.5rem + var(--safe-bottom))" }}
       >
-        <div className="mb-4 flex items-center gap-2">
-          <span className="grid size-8 place-items-center rounded-lg bg-brand-grad text-white">
+        {/* iOS-style sheet grabber */}
+        <div className="mx-auto mb-5 h-1 w-9 rounded-full bg-ink-mute/30 sm:hidden" />
+
+        <div className="mb-5 flex items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-2xl bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/10">
             <PlusIcon />
           </span>
-          <h3 className="text-lg font-semibold text-ink">เพิ่มลง Playlist</h3>
+          <h3 className="font-display text-[19px] font-semibold tracking-[-0.015em] text-ink">
+            เพิ่มลง Playlist
+          </h3>
         </div>
         <div className="max-h-72 space-y-1 overflow-y-auto scrollbar-thin">
           {playlists.length === 0 && (
-            <p className="rounded-lg bg-bg-soft p-3 text-sm text-ink-dim">
+            <p className="rounded-2xl bg-bg-soft/70 p-4 text-[13px] text-ink-dim">
               ยังไม่มี playlist — สร้างใหม่ด้านล่าง
             </p>
           )}
@@ -298,10 +332,12 @@ function AddToPlaylistSheet({
                 onClose();
               }}
               disabled={inLists.has(p.id)}
-              className="flex w-full items-center justify-between rounded-lg border border-transparent px-3 py-2.5 text-left transition hover:border-line hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              className="flex w-full items-center justify-between rounded-2xl border border-transparent px-4 py-3 text-left transition hover:border-line/50 hover:bg-bg-hover active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
             >
-              <span className="font-medium text-ink">{p.name}</span>
-              <span className="text-xs text-ink-mute">
+              <span className="font-semibold text-ink tracking-[-0.005em]">
+                {p.name}
+              </span>
+              <span className="text-[12px] font-medium text-ink-mute">
                 {inLists.has(p.id) ? "✓ เพิ่มแล้ว" : `${p.songIds.length} เพลง`}
               </span>
             </button>
@@ -316,21 +352,69 @@ function AddToPlaylistSheet({
             addToPlaylist(id, songId);
             onClose();
           }}
-          className="mt-4 flex gap-2"
+          className="mt-5 flex gap-2.5"
         >
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="ชื่อ Playlist ใหม่..."
-            className="flex-1 rounded-lg border border-line bg-bg-soft px-3 py-2.5 text-ink placeholder:text-ink-mute focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+            className="flex-1 rounded-2xl border border-line/70 bg-bg-soft px-4 py-3 text-[15px] text-ink shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] placeholder:text-ink-mute focus:border-brand/60 focus:outline-none focus:ring-4 focus:ring-brand/15"
           />
-          <button className="rounded-lg bg-brand-grad px-5 font-medium text-white shadow-glow-sm transition hover:brightness-110">
+          <button
+            type="submit"
+            disabled={!newName.trim()}
+            className="rounded-2xl bg-brand-grad px-5 text-[15px] font-semibold text-white shadow-glow-sm ring-1 ring-white/10 transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          >
             สร้าง
           </button>
         </form>
       </div>
     </div>,
     document.body,
+  );
+}
+
+function ScrollTopButton({
+  visible,
+  onClick,
+}: {
+  visible: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="กลับไปด้านบน"
+      title="กลับไปด้านบน"
+      className={`fixed right-4 z-30 grid size-12 place-items-center rounded-full bg-brand-grad text-white shadow-glow ring-1 ring-white/10 transition-all duration-200 active:scale-90 sm:right-6 sm:size-[52px] ${
+        visible
+          ? "translate-y-0 scale-100 opacity-100"
+          : "pointer-events-none translate-y-4 scale-75 opacity-0"
+      }`}
+      style={{ bottom: "calc(1rem + var(--safe-bottom))" }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-b from-white/25 to-transparent"
+      />
+      <ArrowUpIcon />
+    </button>
+  );
+}
+
+function ArrowUpIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="relative size-5"
+    >
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
   );
 }
 
@@ -343,7 +427,11 @@ function StarIcon({ filled }: { filled: boolean }) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={`size-5 transition ${filled ? "text-accent drop-shadow-[0_0_6px_rgba(245,158,11,0.5)]" : "text-ink-mute group-hover:text-ink-dim"}`}
+      className={`size-5 transition ${
+        filled
+          ? "text-accent drop-shadow-[0_0_8px_rgba(245,158,11,0.55)]"
+          : "text-ink-mute group-hover:text-ink-dim"
+      }`}
     >
       <path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
     </svg>
@@ -355,10 +443,10 @@ function PlusIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="2.25"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="size-5"
+      className="size-[18px]"
     >
       <path d="M12 5v14M5 12h14" />
     </svg>
@@ -373,7 +461,7 @@ function TrashIcon() {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="size-5"
+      className="size-[18px]"
     >
       <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
     </svg>
@@ -387,12 +475,12 @@ function DragHandleIcon() {
       className="size-5"
       aria-hidden="true"
     >
-      <circle cx="9" cy="6" r="1.6" />
-      <circle cx="15" cy="6" r="1.6" />
-      <circle cx="9" cy="12" r="1.6" />
-      <circle cx="15" cy="12" r="1.6" />
-      <circle cx="9" cy="18" r="1.6" />
-      <circle cx="15" cy="18" r="1.6" />
+      <circle cx="9" cy="6" r="1.5" />
+      <circle cx="15" cy="6" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="18" r="1.5" />
+      <circle cx="15" cy="18" r="1.5" />
     </svg>
   );
 }
@@ -400,21 +488,35 @@ function DragHandleIcon() {
 function Empty({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-      <div className="mb-3 grid size-14 place-items-center rounded-2xl bg-brand-grad-soft">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className="size-7 text-brand"
-        >
-          <path d="M9 17V5l12-2v12" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="6" cy="17" r="3" />
-          <circle cx="18" cy="15" r="3" />
-        </svg>
+      <div className="relative mb-5">
+        <div
+          aria-hidden
+          className="absolute inset-0 -m-4 rounded-full bg-brand-grad opacity-20 blur-2xl"
+        />
+        <div className="relative grid size-16 place-items-center rounded-3xl bg-brand-grad-soft ring-1 ring-brand/20">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="size-8 text-brand"
+          >
+            <path
+              d="M9 17V5l12-2v12"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx="6" cy="17" r="3" />
+            <circle cx="18" cy="15" r="3" />
+          </svg>
+        </div>
       </div>
-      <p className="text-lg font-semibold text-ink">{title}</p>
-      <p className="mt-1 text-sm text-ink-dim">{hint}</p>
+      <p className="font-display text-[19px] font-semibold tracking-[-0.015em] text-ink">
+        {title}
+      </p>
+      <p className="mt-1.5 max-w-xs text-[13px] leading-relaxed text-ink-dim">
+        {hint}
+      </p>
     </div>
   );
 }

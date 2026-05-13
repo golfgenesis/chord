@@ -62,6 +62,19 @@ function isRoomOwner(s: Pick<State, "clientId" | "roomOwnerClientId">): boolean 
   return Boolean(s.clientId) && s.roomOwnerClientId === s.clientId;
 }
 
+// Decide which playlist should be active. On the Playlists tab we always
+// auto-pick the first one if the current selection is invalid or missing —
+// the user shouldn't see "0 เพลง" when the room clearly has playlists.
+function resolveActivePlaylistId(
+  playlists: Playlist[],
+  current: string | null,
+  tab: Tab,
+): string | null {
+  if (tab !== "playlists") return null;
+  if (current && playlists.some((p) => p.id === current)) return current;
+  return playlists[0]?.id ?? null;
+}
+
 interface State {
   // dataset
   songs: Song[];
@@ -74,6 +87,7 @@ interface State {
   tab: Tab;
   viewing: Song | null; // fullscreen image
   activePlaylistId: string | null;
+  invertImages: boolean; // dark-mode chord sheets (CSS filter invert)
 
   // identity / room
   clientId: string;
@@ -106,6 +120,7 @@ interface State {
   renamePlaylist: (id: string, name: string) => void;
   deletePlaylist: (id: string) => void;
   setActivePlaylist: (id: string | null) => void;
+  toggleInvertImages: () => void;
 }
 
 export const useApp = create<State>((set, get) => ({
@@ -118,6 +133,7 @@ export const useApp = create<State>((set, get) => ({
   tab: "all",
   viewing: null,
   activePlaylistId: null,
+  invertImages: true,
 
   clientId: "",
   roomCode: "",
@@ -144,6 +160,8 @@ export const useApp = create<State>((set, get) => ({
       roomCode = randomRoom();
       saveLocal("roomCode", roomCode);
     }
+    const invertImages = loadLocal<boolean>("invertImages", true);
+    set({ invertImages });
 
     // Kick off heavy work in parallel: the songs dataset, the Firebase chunk,
     // and the locally-persisted collections. The shell renders as soon as the
@@ -190,6 +208,7 @@ export const useApp = create<State>((set, get) => ({
     // Playlists are per-room (not per-user) and handled by the room sync above.
     csMod
       ?.startCloudSync(
+        clientId,
         { favorites: favArr, latest, roomCode },
         (remote) => {
           const remoteLatest = (remote.latest ?? []).slice(0, LATEST_CAP);
@@ -212,12 +231,13 @@ export const useApp = create<State>((set, get) => ({
   },
 
   setQuery: (q) => set({ query: q }),
-  setTab: (t) =>
+  setTab: (t) => {
+    const { playlists, activePlaylistId } = get();
     set({
       tab: t,
-      activePlaylistId:
-        t === "playlists" ? get().activePlaylistId : null,
-    }),
+      activePlaylistId: resolveActivePlaylistId(playlists, activePlaylistId, t),
+    });
+  },
 
   setRoomCode(code, pushToCloud = true) {
     const valid = /^\d{6}$/.test(code);
@@ -286,7 +306,14 @@ export const useApp = create<State>((set, get) => ({
       if (firstPLSnap) {
         firstPLSnap = false;
         if (normalized.length > 0) {
-          set({ playlists: normalized, activePlaylistId: null });
+          set((prev) => ({
+            playlists: normalized,
+            activePlaylistId: resolveActivePlaylistId(
+              normalized,
+              prev.activePlaylistId,
+              prev.tab,
+            ),
+          }));
           saveJSON("playlists", normalized);
         }
         // If empty: leave local playlists untouched for now. If we end up
@@ -294,8 +321,11 @@ export const useApp = create<State>((set, get) => ({
       } else {
         set((prev) => ({
           playlists: normalized,
-          activePlaylistId:
-            normalized.find((p) => p.id === prev.activePlaylistId)?.id ?? null,
+          activePlaylistId: resolveActivePlaylistId(
+            normalized,
+            prev.activePlaylistId,
+            prev.tab,
+          ),
         }));
         saveJSON("playlists", normalized);
       }
@@ -411,10 +441,11 @@ export const useApp = create<State>((set, get) => ({
   deletePlaylist(id) {
     if (!isRoomOwner(get())) return;
     const playlists = get().playlists.filter((p) => p.id !== id);
+    const prev = get();
+    const stillValidActive = prev.activePlaylistId === id ? null : prev.activePlaylistId;
     set({
       playlists,
-      activePlaylistId:
-        get().activePlaylistId === id ? null : get().activePlaylistId,
+      activePlaylistId: resolveActivePlaylistId(playlists, stillValidActive, prev.tab),
     });
     saveJSON("playlists", playlists);
     get().sync?.publishPlaylists(playlists).catch(console.error);
@@ -422,6 +453,12 @@ export const useApp = create<State>((set, get) => ({
 
   setActivePlaylist(id) {
     set({ activePlaylistId: id });
+  },
+
+  toggleInvertImages() {
+    const next = !get().invertImages;
+    set({ invertImages: next });
+    saveLocal("invertImages", next);
   },
 }));
 

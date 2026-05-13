@@ -11,10 +11,15 @@
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;
+    /* Inter alternates that read closer to SF Pro */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     background-image:
-      radial-gradient(60% 50% at 20% 0%, rgba(139, 92, 246, 0.18) 0%, transparent 55%),
-      radial-gradient(45% 40% at 100% 10%, rgba(236, 72, 153, 0.10) 0%, transparent 55%),
-      radial-gradient(50% 50% at 50% 100%, rgba(6, 182, 212, 0.07) 0%, transparent 60%);
+      radial-gradient(60% 50% at 20% 0%, rgba(139, 92, 246, 0.16) 0%, transparent 55%),
+      radial-gradient(45% 40% at 100% 10%, rgba(236, 72, 153, 0.08) 0%, transparent 55%),
+      radial-gradient(50% 50% at 50% 100%, rgba(6, 182, 212, 0.06) 0%, transparent 60%);
     background-attachment: fixed;
     overflow: hidden;
   }
@@ -26,18 +31,29 @@
   button {
     -webkit-tap-highlight-color: transparent;
   }
+  /* macOS/iOS-style smooth focus ring for keyboard nav */
+  :focus-visible {
+    outline: none;
+  }
+  /* Smoother default transitions everywhere */
+  button,
+  a,
+  input,
+  [role="button"] {
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
 @layer components {
   .glass {
     background: rgba(23, 22, 38, 0.55);
-    backdrop-filter: blur(14px) saturate(140%);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
   }
   .glass-strong {
-    background: rgba(11, 10, 20, 0.78);
-    backdrop-filter: blur(20px) saturate(150%);
-    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    background: rgba(11, 10, 20, 0.72);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
   }
   .gradient-text {
     background-image: linear-gradient(135deg, #c4b5fd 0%, #f9a8d4 50%, #fcd34d 100%);
@@ -56,8 +72,8 @@
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(139, 92, 246, 0.35) 30%,
-      rgba(236, 72, 153, 0.35) 70%,
+      rgba(139, 92, 246, 0.3) 30%,
+      rgba(236, 72, 153, 0.3) 70%,
       transparent 100%
     );
     pointer-events: none;
@@ -66,14 +82,22 @@
 
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-line rounded;
+    background: rgba(108, 105, 138, 0.3);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply bg-line-strong;
+    background: rgba(108, 105, 138, 0.5);
+    background-clip: padding-box;
+    border: 2px solid transparent;
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;

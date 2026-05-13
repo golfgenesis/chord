@@ -1,33 +1,35 @@
 import { useApp } from "../store";
 import type { Tab } from "../types";
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "all", label: "ทั้งหมด", icon: "🎵" },
-  { id: "favorites", label: "Favorites", icon: "★" },
-  { id: "playlists", label: "Playlists", icon: "♪" },
+const TABS: { id: Tab; label: string }[] = [
+  { id: "all", label: "ทั้งหมด" },
+  { id: "favorites", label: "Favorites" },
+  { id: "playlists", label: "Playlists" },
 ];
 
 export function Tabs() {
   const tab = useApp((s) => s.tab);
   const setTab = useApp((s) => s.setTab);
   return (
-    <div className="flex gap-1.5 overflow-x-auto border-b border-line/60 px-3 py-2 no-scrollbar">
-      {TABS.map((t) => {
-        const active = tab === t.id;
-        return (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`relative shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition ${
-              active
-                ? "bg-brand-grad text-white shadow-glow-sm"
-                : "border border-line bg-bg-card/50 text-ink-dim hover:border-line-strong hover:bg-bg-hover hover:text-ink"
-            }`}
-          >
-            <span className="relative z-10 whitespace-nowrap">{t.label}</span>
-          </button>
-        );
-      })}
+    <div className="border-b border-line/40 px-4 py-3 sm:py-3.5">
+      <div className="inline-flex rounded-full border border-line/60 bg-bg-soft/70 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]">
+        {TABS.map((t) => {
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`relative shrink-0 rounded-full px-4 py-1.5 text-[13px] font-semibold tracking-[-0.005em] transition-all duration-150 sm:px-5 sm:py-2 sm:text-sm ${
+                active
+                  ? "bg-bg-card text-ink shadow-[0_1px_2px_rgba(0,0,0,0.3),inset_0_1px_0_0_rgba(255,255,255,0.06)] ring-1 ring-white/5"
+                  : "text-ink-dim hover:text-ink"
+              }`}
+            >
+              <span className="whitespace-nowrap">{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

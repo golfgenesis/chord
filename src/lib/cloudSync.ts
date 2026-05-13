@@ -1,49 +1,44 @@
-// Cross-device sync of user data (favorites, latest, playlists) via Firestore
-// under users/{uid}. Uses Firebase Anonymous Auth — no sign-in UI needed.
+// Cross-device sync of per-client data (favorites, latest, roomCode) via
+// Firestore under clients/{clientId}. NO Firebase Auth — the clientId is a
+// random 8-char string persisted in localStorage (see store.ts), so no
+// anonymous auth user records accumulate in the Firebase Console.
 //
 //   Local action -> store update -> saveJSON (IndexedDB) + pushUpdate (debounced)
 //   Remote change -> onSnapshot -> onRemoteUpdate (caller merges into store)
 //
 // Self-write feedback is filtered via snap.metadata.hasPendingWrites.
 import { onSnapshot, setDoc } from "firebase/firestore";
-import {
-  firebaseEnabled,
-  getCurrentUser,
-  userDocRef,
-} from "./firebase";
+import { firebaseEnabled, clientDocRef } from "./firebase";
 
-// Per-user data. Playlists are now per-room (see room sync in firebase.ts),
-// not per-user, so they're not in here.
+// Per-client data. Playlists are now per-room (see room sync in firebase.ts),
+// not per-client, so they're not in here.
 export interface UserData {
   favorites: number[];
   latest: number[];
   roomCode?: string;
 }
 
-let uid: string | null = null;
+let activeClientId: string | null = null;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingDelta: Partial<UserData> = {};
 let ready = false;
 
 /**
- * Initialize cloud sync. Resolves to the user's uid once the first snapshot
- * has been received (so callers know cloud is in sync with local UI).
+ * Initialize cloud sync for a given clientId.
  *
- * - If the user has no remote doc yet, the provided `initialLocal` is pushed up.
+ * - If the client has no remote doc yet, the provided `initialLocal` is pushed up.
  * - If a remote doc exists, `onRemoteUpdate` is called immediately and again
- *   whenever the remote changes from another device.
+ *   whenever the remote changes from another device using the same clientId.
  */
 export async function startCloudSync(
+  clientId: string,
   initialLocal: UserData,
   onRemoteUpdate: (data: UserData) => void,
 ): Promise<string | null> {
   if (!firebaseEnabled) return null;
-  const user = await getCurrentUser();
-  if (!user) return null;
-  uid = user.uid;
-
-  const ref = userDocRef(uid);
+  const ref = clientDocRef(clientId);
   if (!ref) return null;
+  activeClientId = clientId;
 
   let isFirst = true;
   // No teardown — the subscription lives for the page lifetime.
@@ -69,12 +64,12 @@ export async function startCloudSync(
     (err) => console.error("cloudSync subscription error:", err),
   );
 
-  return uid;
+  return clientId;
 }
 
 /** Queue a partial update to the remote doc. Coalesces writes within 400ms. */
 export function pushUpdate(delta: Partial<UserData>) {
-  if (!uid || !ready) return;
+  if (!activeClientId || !ready) return;
   Object.assign(pendingDelta, delta);
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(flush, 400);
@@ -82,8 +77,8 @@ export function pushUpdate(delta: Partial<UserData>) {
 
 async function flush() {
   pendingTimer = null;
-  if (!uid) return;
-  const ref = userDocRef(uid);
+  if (!activeClientId) return;
+  const ref = clientDocRef(activeClientId);
   if (!ref) return;
   const delta = pendingDelta;
   pendingDelta = {};
@@ -94,4 +89,3 @@ async function flush() {
     console.error("cloudSync write failed:", err);
   }
 }
-

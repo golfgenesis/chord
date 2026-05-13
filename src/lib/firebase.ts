@@ -14,13 +14,6 @@ import {
   type OnDisconnect,
 } from "firebase/database";
 import {
-  getAuth,
-  signInAnonymously,
-  onAuthStateChanged,
-  type Auth,
-  type User,
-} from "firebase/auth";
-import {
   getFirestore,
   doc,
   type Firestore,
@@ -37,38 +30,27 @@ const cfg = {
 };
 
 let db: Database | null = null;
-let auth: Auth | null = null;
 let firestore: Firestore | null = null;
 export const firebaseEnabled = Boolean(cfg.apiKey && cfg.databaseURL);
 
 if (firebaseEnabled) {
   const app = initializeApp(cfg as Required<typeof cfg>);
   db = getDatabase(app);
-  auth = getAuth(app);
   firestore = getFirestore(app);
 }
 
-/** Resolve the current user, signing in anonymously if needed. */
-export function getCurrentUser(): Promise<User | null> {
-  if (!auth) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    if (auth!.currentUser) return resolve(auth!.currentUser);
-    const unsub = onAuthStateChanged(auth!, (user) => {
-      unsub();
-      if (user) return resolve(user);
-      signInAnonymously(auth!)
-        .then((cred) => resolve(cred.user))
-        .catch((err) => {
-          console.error("Anonymous sign-in failed:", err);
-          resolve(null);
-        });
-    });
-  });
-}
-
-export function userDocRef(uid: string): DocumentReference | null {
+/**
+ * Per-client Firestore doc. We DON'T use Firebase Anonymous Auth — that
+ * created an orphan auth record every time someone cleared their browser
+ * cache. Instead we key off `clientId`, an 8-char random string persisted in
+ * localStorage (see store.ts). Trade-off: anyone who knows a clientId can
+ * read/write that doc, so Firestore rules must allow open access to
+ * `clients/{clientId}`. Acceptable for this band-internal tool — the data
+ * is just favorites/latest, non-sensitive, and clientId is hard to guess.
+ */
+export function clientDocRef(clientId: string): DocumentReference | null {
   if (!firestore) return null;
-  return doc(firestore, "users", uid);
+  return doc(firestore, "clients", clientId);
 }
 
 // ---- Room sync (Realtime DB) -----------------------------------------------

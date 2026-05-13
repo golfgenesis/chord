@@ -14,8 +14,8 @@ export function PlaylistPicker() {
   const active = playlists.find((p) => p.id === activePlaylistId) ?? null;
 
   return (
-    <div className="border-b border-line/60 bg-bg-soft/40">
-      <div className="flex gap-1.5 overflow-x-auto px-3 py-2 no-scrollbar">
+    <div className="border-b border-line/40 bg-bg-soft/30">
+      <div className="flex gap-2 overflow-x-auto px-4 py-2.5 no-scrollbar">
         {playlists.map((p) => (
           <PlaylistPill
             key={p.id}
@@ -27,14 +27,14 @@ export function PlaylistPicker() {
         {isOwner && (
           <button
             onClick={() => setCreating(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/60 bg-brand-soft px-3.5 py-1.5 text-sm font-medium text-brand transition hover:border-brand hover:bg-brand/15"
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/50 bg-brand-soft px-4 py-1.5 text-[13px] font-semibold text-brand transition hover:border-brand hover:bg-brand/15 active:scale-95"
           >
             <PlusIcon className="size-3.5" />
             {playlists.length === 0 ? "สร้าง Playlist แรก" : "Playlist ใหม่"}
           </button>
         )}
         {!isOwner && playlists.length === 0 && (
-          <span className="flex shrink-0 items-center rounded-full border border-line bg-bg-soft px-3.5 py-1.5 text-xs text-ink-mute">
+          <span className="flex shrink-0 items-center rounded-full border border-line/60 bg-bg-soft/60 px-4 py-1.5 text-[12px] text-ink-mute">
             เจ้าของห้องยังไม่ได้สร้าง Playlist
           </span>
         )}
@@ -67,15 +67,15 @@ function PlaylistPill({
   return (
     <button
       onClick={onClick}
-      className={`flex shrink-0 items-center gap-2 rounded-full px-3.5 py-1.5 text-sm transition ${
+      className={`flex shrink-0 items-center gap-2 rounded-full px-4 py-1.5 text-[13px] transition-all duration-150 active:scale-95 ${
         active
-          ? "bg-brand-grad text-white shadow-glow-sm"
-          : "border border-line bg-bg-card/60 text-ink-dim hover:bg-bg-hover hover:text-ink"
+          ? "bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/10"
+          : "border border-line/60 bg-bg-card/60 text-ink-dim hover:bg-bg-hover hover:text-ink"
       }`}
     >
-      <span className="font-medium">{playlist.name}</span>
+      <span className="font-semibold tracking-[-0.005em]">{playlist.name}</span>
       <span
-        className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+        className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
           active ? "bg-white/25 text-white" : "bg-bg/60 text-ink-mute"
         }`}
       >
@@ -111,7 +111,7 @@ function PlaylistHeader({
   }
 
   return (
-    <div className="border-t border-line/40 px-3 py-2.5">
+    <div className="border-t border-line/30 px-4 py-3">
       {mode === "rename" && (
         <form
           onSubmit={(e) => {
@@ -120,26 +120,23 @@ function PlaylistHeader({
           }}
           className="flex items-center gap-2"
         >
-          <span className="text-[10px] uppercase tracking-[0.18em] text-ink-mute">
-            ชื่อ
-          </span>
           <input
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && cancel()}
-            className="flex-1 rounded-md border border-brand bg-bg-soft px-2.5 py-1.5 text-base font-semibold text-ink focus:outline-none focus:ring-2 focus:ring-brand/30"
+            className="flex-1 rounded-xl border border-brand/50 bg-bg-soft px-3 py-2 text-[15px] font-semibold text-ink shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] focus:outline-none focus:ring-4 focus:ring-brand/15"
           />
           <button
             type="button"
             onClick={cancel}
-            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:bg-bg-hover hover:text-ink"
+            className="rounded-xl border border-line/60 bg-bg-card/60 px-3 py-2 text-[13px] font-medium text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-95"
           >
             ยกเลิก
           </button>
           <button
             type="submit"
-            className="rounded-md bg-brand-grad px-3 py-1.5 text-sm font-medium text-white shadow-glow-sm transition hover:brightness-110"
+            className="rounded-xl bg-brand-grad px-3 py-2 text-[13px] font-semibold text-white shadow-glow-sm ring-1 ring-white/10 transition hover:brightness-110 active:scale-95"
           >
             บันทึก
           </button>
@@ -148,18 +145,18 @@ function PlaylistHeader({
 
       {mode === "confirmDelete" && (
         <div className="flex items-center gap-2">
-          <span className="flex-1 truncate text-sm text-danger">
+          <span className="flex-1 truncate text-[14px] leading-[1.5] text-danger">
             ลบ <span className="font-semibold">"{playlist.name}"</span> ?
           </span>
           <button
             onClick={() => setMode("view")}
-            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:bg-bg-hover hover:text-ink"
+            className="rounded-xl border border-line/60 bg-bg-card/60 px-3 py-2 text-[13px] font-medium text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-95"
           >
             ยกเลิก
           </button>
           <button
             onClick={() => deletePlaylist(playlist.id)}
-            className="rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white transition hover:brightness-110"
+            className="rounded-xl bg-danger px-3 py-2 text-[13px] font-semibold text-white shadow-[0_4px_16px_-4px_rgba(244,63,94,0.5)] ring-1 ring-white/10 transition hover:brightness-110 active:scale-95"
           >
             ลบเลย
           </button>
@@ -169,40 +166,70 @@ function PlaylistHeader({
       {mode === "view" && (
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate font-display text-base font-semibold text-ink">
+            <h3 className="truncate font-display text-[17px] font-semibold leading-[1.5] tracking-tight text-ink sm:text-[19px] sm:leading-[1.4]">
               {playlist.name}
             </h3>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-ink-mute">
+            <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.18em] text-ink-mute">
               {playlist.songIds?.length ?? 0} เพลง
-              {!isOwner && <span className="ml-2 text-ink-mute/80">· read-only</span>}
+              {!isOwner && (
+                <span className="ml-2 text-ink-mute/80">· read-only</span>
+              )}
             </p>
           </div>
           {isOwner && (
             <>
-              <button
+              <IconBtn
                 onClick={() => {
                   setDraft(playlist.name);
                   setMode("rename");
                 }}
-                className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-brand/50 hover:bg-bg-hover hover:text-ink"
                 aria-label="แก้ไขชื่อ"
                 title="แก้ไขชื่อ"
               >
                 <EditIcon />
-              </button>
-              <button
+              </IconBtn>
+              <IconBtn
                 onClick={() => setMode("confirmDelete")}
-                className="rounded-lg border border-line bg-bg-card/60 p-2 text-ink-dim transition hover:border-danger/50 hover:bg-bg-hover hover:text-danger"
                 aria-label="ลบ Playlist"
                 title="ลบ Playlist"
+                danger
               >
                 <TrashIcon />
-              </button>
+              </IconBtn>
             </>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+function IconBtn({
+  children,
+  onClick,
+  title,
+  "aria-label": ariaLabel,
+  danger,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title?: string;
+  "aria-label"?: string;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`grid size-9 place-items-center rounded-xl border border-line/60 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition active:scale-95 ${
+        danger
+          ? "hover:border-danger/40 hover:bg-danger/10 hover:text-danger"
+          : "hover:border-brand/40 hover:bg-bg-hover hover:text-ink"
+      }`}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -218,23 +245,26 @@ function CreateSheet({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-40 flex items-end bg-black/70 backdrop-blur-sm animate-fade-in sm:items-center sm:justify-center"
+      className="fixed inset-0 z-40 flex items-end bg-black/70 backdrop-blur-md animate-fade-in sm:items-center sm:justify-center"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full rounded-t-3xl border border-line bg-bg-card p-5 shadow-card animate-slide-up sm:max-w-md sm:rounded-2xl"
-        style={{ paddingBottom: "calc(1.25rem + var(--safe-bottom))" }}
+        className="w-full rounded-t-[28px] border border-line/60 bg-bg-card/95 p-6 shadow-card backdrop-blur-2xl animate-slide-up sm:max-w-md sm:rounded-3xl"
+        style={{ paddingBottom: "calc(1.5rem + var(--safe-bottom))" }}
       >
-        <div className="mb-4 flex items-center gap-2.5">
-          <span className="grid size-9 place-items-center rounded-xl bg-brand-grad text-white shadow-glow-sm">
+        {/* iOS-style sheet grabber */}
+        <div className="mx-auto mb-5 h-1 w-9 rounded-full bg-ink-mute/30 sm:hidden" />
+
+        <div className="mb-5 flex items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-2xl bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/10">
             <PlusIcon className="size-5" />
           </span>
           <div>
-            <h3 className="font-display text-lg font-semibold text-ink">
+            <h3 className="font-display text-[19px] font-semibold tracking-[-0.015em] text-ink">
               สร้าง Playlist ใหม่
             </h3>
-            <p className="text-xs text-ink-mute">
+            <p className="mt-0.5 text-[13px] text-ink-mute">
               ใส่ชื่อสั้นๆ จำง่าย เช่น "งานเลี้ยง", "set 1"
             </p>
           </div>
@@ -251,20 +281,20 @@ function CreateSheet({
             onChange={(e) => setName(e.target.value)}
             placeholder="ชื่อ Playlist..."
             maxLength={40}
-            className="w-full rounded-lg border border-line bg-bg-soft px-3 py-3 text-base text-ink placeholder:text-ink-mute focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+            className="w-full rounded-2xl border border-line/70 bg-bg-soft px-4 py-3 text-[16px] text-ink shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] placeholder:text-ink-mute focus:border-brand/60 focus:outline-none focus:ring-4 focus:ring-brand/15"
           />
-          <div className="mt-4 flex gap-2">
+          <div className="mt-5 flex gap-2.5">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-lg border border-line py-2.5 font-medium text-ink-dim transition hover:bg-bg-hover hover:text-ink"
+              className="flex-1 rounded-2xl border border-line/60 bg-bg-soft py-3 text-[15px] font-semibold text-ink-dim transition hover:bg-bg-hover hover:text-ink active:scale-[0.98]"
             >
               ยกเลิก
             </button>
             <button
               type="submit"
               disabled={!trimmed}
-              className="flex-1 rounded-lg bg-brand-grad py-2.5 font-medium text-white shadow-glow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+              className="flex-1 rounded-2xl bg-brand-grad py-3 text-[15px] font-semibold text-white shadow-glow ring-1 ring-white/10 transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               สร้าง
             </button>
@@ -301,7 +331,7 @@ function EditIcon() {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="size-4"
+      className="size-[18px]"
     >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
@@ -318,7 +348,7 @@ function TrashIcon() {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="size-4"
+      className="size-[18px]"
     >
       <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
     </svg>

@@ -46,13 +46,16 @@ export function NowPlaying() {
 
       <div className="min-w-0 flex-1">
         <div
-          className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${
+          className={`text-[10px] font-semibold uppercase leading-[1.6] tracking-[0.2em] ${
             mine ? "text-brand/90" : "text-cyan/80"
           }`}
         >
           {mine ? "คุณเลือก" : "นักร้องเลือก"}
         </div>
-        <div className="mt-0.5 truncate font-display text-[19px] font-semibold tracking-[-0.015em] text-ink sm:text-[24px] sm:leading-[1.15]">
+        {/* Thai needs ~1.35+ line-height to fit upper tone marks + lower
+            vowels; the previous 1.15 clipped them. tracking left looser too —
+            Latin-style negative tracking compresses Thai marks. */}
+        <div className="mt-0.5 truncate font-display text-[19px] font-semibold leading-[1.5] tracking-tight text-ink sm:text-[24px] sm:leading-[1.4]">
           {room.songName}
         </div>
       </div>
