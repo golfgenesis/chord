@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useApp, useIsRoomOwner } from "../store";
+import { useApp } from "../store";
 import { useVisibleSongs } from "../hooks/useVisibleSongs";
 import type { Song } from "../types";
 
@@ -25,7 +25,12 @@ export function SongList() {
   const tab = useApp((s) => s.tab);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const query = useApp((s) => s.query);
-  const isOwner = useIsRoomOwner();
+  // The active playlist is "mine" only when it's in our local playlist
+  // array — playlists belonging to other room members aren't editable
+  // from this device (no add / remove / reorder).
+  const isActivePlaylistMine = useApp((s) =>
+    s.playlists.some((p) => p.id === s.activePlaylistId),
+  );
 
   // Refs + state for the floating "back to top" button. Virtuoso has its own
   // imperative scroll API; the sortable branch uses a plain scrollable div.
@@ -66,11 +71,13 @@ export function SongList() {
     );
   }
 
-  // Owners viewing a playlist with no active search → drag-and-drop reorder.
+  // Drag-and-drop reorder is only enabled when the active playlist
+  // belongs to the local user — you can view someone else's list but
+  // you can't rearrange their songs.
   if (
     tab === "playlists" &&
     activePlaylistId &&
-    isOwner &&
+    isActivePlaylistMine &&
     !query.trim()
   ) {
     return (
@@ -210,7 +217,11 @@ function Row({
   const tab = useApp((s) => s.tab);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const removeFromPlaylist = useApp((s) => s.removeFromPlaylist);
-  const isOwner = useIsRoomOwner();
+  // The remove (trash) button only shows when the active playlist is
+  // ours — you can't delete songs out of another member's list.
+  const canRemoveFromActive = useApp((s) =>
+    s.playlists.some((p) => p.id === s.activePlaylistId),
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
@@ -247,19 +258,19 @@ function Row({
         </div>
       </div>
 
-      {isOwner && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setPickerOpen(true);
-          }}
-          className="-m-1 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink active:scale-90"
-          aria-label="Add to playlist"
-        >
-          <PlusIcon />
-        </button>
-      )}
-      {isOwner && tab === "playlists" && activePlaylistId && (
+      {/* Everyone can add a song to their OWN playlists — the picker
+          sheet only lists the local user's playlists. */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setPickerOpen(true);
+        }}
+        className="-m-1 shrink-0 rounded-lg p-1.5 text-ink-mute transition hover:bg-bg-hover hover:text-ink active:scale-90"
+        aria-label="Add to playlist"
+      >
+        <PlusIcon />
+      </button>
+      {tab === "playlists" && activePlaylistId && canRemoveFromActive && (
         <button
           onClick={(e) => {
             e.stopPropagation();

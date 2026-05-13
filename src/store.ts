@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import type { Playlist, RoomState, Song, Tab } from "./types";
 import { loadJSON, loadLocal, saveJSON, saveLocal } from "./lib/persist";
@@ -62,6 +63,75 @@ function isRoomOwner(s: Pick<State, "clientId" | "roomOwnerClientId">): boolean 
   return Boolean(s.clientId) && s.roomOwnerClientId === s.clientId;
 }
 
+/**
+ * Single tagged entry for the merged playlist view. `ownerClientId` lets
+ * the UI grant edit rights to entries the local user owns and show the
+ * `read-only` badge on everyone else's; `displayName` is the original
+ * name with `1/2/3…` suffix appended when multiple clients picked the
+ * same playlist title.
+ */
+export interface MergedPlaylist {
+  playlist: Playlist;
+  ownerClientId: string;
+  displayName: string;
+  isMine: boolean;
+}
+
+/**
+ * Merge `playlists` (the local user's) with `othersPlaylists` (every
+ * other member of the current room) into a single ordered list. Order:
+ *   1. The room owner's playlists first (whether that's me or a guest),
+ *   2. then everyone else, alphabetical by clientId for a deterministic
+ *      sort that doesn't shuffle as edits land.
+ * Duplicate names get `(2)`, `(3)`… suffixes in display order so the UI
+ * never shows two identical-looking pills.
+ */
+function mergePlaylistsFromState(state: {
+  playlists: Playlist[];
+  othersPlaylists: Record<string, Playlist[]>;
+  clientId: string;
+  roomOwnerClientId: string | null;
+}): MergedPlaylist[] {
+  const myId = state.clientId;
+  const ownerId = state.roomOwnerClientId;
+  // Group by clientId, then sort clientIds so the room owner comes first.
+  const buckets: Array<[string, Playlist[]]> = [];
+  buckets.push([myId, state.playlists]);
+  for (const cid of Object.keys(state.othersPlaylists).sort()) {
+    buckets.push([cid, state.othersPlaylists[cid] ?? []]);
+  }
+  buckets.sort((a, b) => {
+    if (a[0] === ownerId) return -1;
+    if (b[0] === ownerId) return 1;
+    // Within non-owners, keep "mine" right after the owner so my entries
+    // are easy to find — but only if I'm not the owner (else I'm already
+    // first by the rule above).
+    if (a[0] === myId) return -1;
+    if (b[0] === myId) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const flat: MergedPlaylist[] = [];
+  for (const [cid, pls] of buckets) {
+    for (const p of pls) {
+      flat.push({
+        playlist: p,
+        ownerClientId: cid,
+        displayName: p.name,
+        isMine: cid === myId,
+      });
+    }
+  }
+  // Dedupe display names with (2), (3)… suffixes in encounter order.
+  const counts = new Map<string, number>();
+  for (const item of flat) {
+    const n = (counts.get(item.playlist.name) ?? 0) + 1;
+    counts.set(item.playlist.name, n);
+    if (n > 1) item.displayName = `${item.playlist.name} (${n})`;
+  }
+  return flat;
+}
+
 // Decide which playlist should be active. On the Playlists tab we always
 // auto-pick the first one if the current selection is invalid or missing —
 // the user shouldn't see "0 เพลง" when the room clearly has playlists.
@@ -104,6 +174,11 @@ interface State {
   favorites: Set<number>;
   latest: number[]; // most recent first
   playlists: Playlist[];
+  // Playlists belonging to OTHER clients in the same room, keyed by their
+  // clientId. Ephemeral — populated by the room subscription, wiped when
+  // we leave / switch rooms. We don't persist this; on rejoin everyone
+  // republishes from their own local copy.
+  othersPlaylists: Record<string, Playlist[]>;
 
   // actions
   init: () => Promise<void>;
@@ -125,7 +200,17 @@ interface State {
   toggleAutoOpen: () => void;
 }
 
-export const useApp = create<State>((set, get) => ({
+export const useApp = create<State>((set, get) => {
+  // Push our own playlists up to the current room. Called after every
+  // local mutation so other members see edits in real time. No-ops outside
+  // of a room.
+  function publishOwnPlaylists(playlists: Playlist[]) {
+    const { sync, clientId } = get();
+    if (!sync || !clientId) return;
+    sync.publishMyPlaylists(clientId, playlists).catch(console.error);
+  }
+
+  return {
   songs: [],
   songIndex: [],
   byId: new Map(),
@@ -150,6 +235,7 @@ export const useApp = create<State>((set, get) => ({
   favorites: new Set(),
   latest: [],
   playlists: [],
+  othersPlaylists: {},
 
   async init() {
     // Persisted identity / room
@@ -322,8 +408,9 @@ export const useApp = create<State>((set, get) => ({
       return;
     }
 
-    // Tear down old room. If we were owner of it, release ownership in the DB
-    // so the room becomes claimable again.
+    // Tear down old room. We release ownership AND clear our per-client
+    // playlist key so the previous room doesn't keep our data hanging
+    // around. (onDisconnect handles closed-tab cleanup separately.)
     const oldUnsubRoom = get().unsubscribeRoom;
     const oldUnsubPL = get().unsubscribeRoomPlaylists;
     const oldUnsubOwner = get().unsubscribeRoomOwner;
@@ -333,6 +420,9 @@ export const useApp = create<State>((set, get) => ({
     if (oldSync && oldOwnerId && oldOwnerId === myClientId) {
       oldSync.releaseOwner(myClientId).catch(console.error);
     }
+    if (oldSync && myClientId) {
+      oldSync.removeMyPlaylists(myClientId).catch(console.error);
+    }
     if (oldUnsubRoom) oldUnsubRoom();
     if (oldUnsubPL) oldUnsubPL();
     if (oldUnsubOwner) oldUnsubOwner();
@@ -340,72 +430,57 @@ export const useApp = create<State>((set, get) => ({
     const sync = fbMod.getRoomSync(code);
     const unsub = sync.subscribe((state) => set({ room: state }));
 
-    // Subscribe to ownership. We attempt to claim whenever the room is
-    // unowned — both on the first snapshot of a fresh room AND whenever the
-    // current owner disconnects (their onDisconnect handler wipes the whole
-    // rooms/{code} node, which fires a null snapshot for every remaining
-    // guest). Without re-claiming, everyone would be stuck as Guest forever
-    // after the owner closes their tab. claimOwner uses an RTDB transaction
-    // so racing guests resolve to exactly one winner.
+    // Subscribe to ownership. We claim whenever the room is unowned (both
+    // on first snapshot and whenever the current owner disconnects).
+    // claimOwner uses an RTDB transaction so racing guests resolve to a
+    // single winner.
     const unsubOwner = sync.subscribeOwner((owner) => {
-      const prevOwnerId = get().roomOwnerClientId;
       const nextOwnerId = owner?.clientId ?? null;
       set({ roomOwnerClientId: nextOwnerId });
       if (!nextOwnerId) {
         sync.claimOwner(myClientId).catch(console.error);
-        return;
-      }
-      // On transitioning into ownership, seed the room with our local
-      // playlists. If the room already had playlists, they were adopted by
-      // subscribePlaylists; this just republishes the current state, which is
-      // a no-op.
-      if (nextOwnerId === myClientId && prevOwnerId !== myClientId) {
-        const localPL = get().playlists;
-        if (localPL.length > 0) {
-          sync.publishPlaylists(localPL).catch(console.error);
-        }
       }
     });
 
-    // Subscribe to playlists. We always adopt the remote view (the owner is
-    // the source of truth) UNLESS the remote is null/empty — that happens
-    // when the owner disconnects and their onDisconnect wipes the room node.
-    // Treating null as "wipe local" would destroy every guest's playlists
-    // when the owner leaves. Instead we keep local intact; whichever guest
-    // wins the re-claim will republish from their own copy.
-    let firstPLSnap = true;
-    const unsubPL = sync.subscribePlaylists((remote) => {
-      const normalized = normalizePlaylists(remote);
-      if (firstPLSnap) {
-        firstPLSnap = false;
-        if (normalized.length > 0) {
-          set((prev) => ({
-            playlists: normalized,
-            activePlaylistId: resolveActivePlaylistId(
-              normalized,
-              prev.activePlaylistId,
-              prev.tab,
-            ),
-          }));
-          saveJSON("playlists", normalized);
-        }
-        // If empty: leave local playlists untouched for now. If we end up
-        // owning this room, the owner-subscription will publish them.
-        return;
+    // Subscribe to the room's playlists map (`{ clientId → Playlist[] }`).
+    // Split mine vs others — we never overwrite our own state from the
+    // wire, only update `othersPlaylists`. Local edits are the source of
+    // truth for our entry; we push that up explicitly on every mutation.
+    const unsubPL = sync.subscribePlaylists((byClient) => {
+      const map = byClient ?? {};
+      const others: Record<string, Playlist[]> = {};
+      for (const [cid, pls] of Object.entries(map)) {
+        if (cid === myClientId) continue;
+        others[cid] = normalizePlaylists(pls);
       }
-      // Subsequent snapshots: only adopt non-empty payloads. Empty/null means
-      // the room was abandoned and is about to be re-claimed by someone.
-      if (normalized.length === 0) return;
-      set((prev) => ({
-        playlists: normalized,
-        activePlaylistId: resolveActivePlaylistId(
-          normalized,
-          prev.activePlaylistId,
-          prev.tab,
-        ),
-      }));
-      saveJSON("playlists", normalized);
+      set((prev) => {
+        // After the room's playlist map changes (someone joined, left, or
+        // edited), recompute the active selection so it still points at a
+        // valid entry within the new merged view.
+        const merged = mergePlaylistsFromState({
+          playlists: prev.playlists,
+          othersPlaylists: others,
+          clientId: myClientId,
+          roomOwnerClientId: prev.roomOwnerClientId,
+        });
+        return {
+          othersPlaylists: others,
+          activePlaylistId: resolveActivePlaylistId(
+            merged.map((m) => m.playlist),
+            prev.activePlaylistId,
+            prev.tab,
+          ),
+        };
+      });
     });
+
+    // Push our own playlists into the new room immediately so other
+    // members see them without needing us to make an edit first.
+    if (myClientId) {
+      sync
+        .publishMyPlaylists(myClientId, get().playlists)
+        .catch(console.error);
+    }
 
     saveLocal("roomCode", code);
     // Keep the URL in sync so the address bar is always shareable. Preserve
@@ -426,6 +501,8 @@ export const useApp = create<State>((set, get) => ({
       unsubscribeRoomOwner: unsubOwner,
       room: null,
       roomOwnerClientId: null,
+      // Stale members from the previous room don't apply here.
+      othersPlaylists: {},
     });
   },
 
@@ -482,7 +559,9 @@ export const useApp = create<State>((set, get) => ({
   },
 
   addToPlaylist(playlistId, id) {
-    if (!isRoomOwner(get())) return;
+    // Each member edits only their OWN playlists. If `playlistId` isn't in
+    // our local list it belongs to another member and is read-only here.
+    if (!get().playlists.some((p) => p.id === playlistId)) return;
     const playlists = get().playlists.map((p) =>
       p.id === playlistId && !p.songIds.includes(id)
         ? { ...p, songIds: [...p.songIds, id] }
@@ -490,11 +569,11 @@ export const useApp = create<State>((set, get) => ({
     );
     set({ playlists });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
   },
 
   removeFromPlaylist(playlistId, id) {
-    if (!isRoomOwner(get())) return;
+    if (!get().playlists.some((p) => p.id === playlistId)) return;
     const playlists = get().playlists.map((p) =>
       p.id === playlistId
         ? { ...p, songIds: p.songIds.filter((x) => x !== id) }
@@ -502,42 +581,42 @@ export const useApp = create<State>((set, get) => ({
     );
     set({ playlists });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
   },
 
   reorderPlaylist(playlistId, songIds) {
-    if (!isRoomOwner(get())) return;
+    if (!get().playlists.some((p) => p.id === playlistId)) return;
     const playlists = get().playlists.map((p) =>
       p.id === playlistId ? { ...p, songIds: [...songIds] } : p,
     );
     set({ playlists });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
   },
 
   createPlaylist(name) {
-    if (!isRoomOwner(get())) return "";
+    // Anyone in the room can create a playlist — it becomes theirs.
     const id = Math.random().toString(36).slice(2, 10);
     const p: Playlist = { id, name, songIds: [], createdAt: Date.now() };
     const playlists = [...get().playlists, p];
     set({ playlists, activePlaylistId: id });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
     return id;
   },
 
   renamePlaylist(id, name) {
-    if (!isRoomOwner(get())) return;
+    if (!get().playlists.some((p) => p.id === id)) return;
     const playlists = get().playlists.map((p) =>
       p.id === id ? { ...p, name } : p,
     );
     set({ playlists });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
   },
 
   deletePlaylist(id) {
-    if (!isRoomOwner(get())) return;
+    if (!get().playlists.some((p) => p.id === id)) return;
     const playlists = get().playlists.filter((p) => p.id !== id);
     const prev = get();
     const stillValidActive = prev.activePlaylistId === id ? null : prev.activePlaylistId;
@@ -546,7 +625,7 @@ export const useApp = create<State>((set, get) => ({
       activePlaylistId: resolveActivePlaylistId(playlists, stillValidActive, prev.tab),
     });
     saveJSON("playlists", playlists);
-    get().sync?.publishPlaylists(playlists).catch(console.error);
+    publishOwnPlaylists(playlists);
   },
 
   setActivePlaylist(id) {
@@ -564,7 +643,35 @@ export const useApp = create<State>((set, get) => ({
     set({ invertImages: next });
     saveLocal("invertImages", next);
   },
-}));
+  };
+});
 
 export const useIsRoomOwner = (): boolean =>
   useApp((s) => isRoomOwner(s));
+
+/**
+ * Owner-first merged playlist view for UI consumption. Each entry carries
+ * its `ownerClientId`, an `isMine` flag (so the UI knows whether to show
+ * edit affordances), and a `displayName` with `(2)/(3)…` suffixes applied
+ * to dedupe collisions across members.
+ *
+ * The selector intentionally allocates a new array each render — useMemo'd
+ * inside this hook so it only recomputes when the underlying state slices
+ * actually change.
+ */
+export function useMergedPlaylists(): MergedPlaylist[] {
+  const playlists = useApp((s) => s.playlists);
+  const othersPlaylists = useApp((s) => s.othersPlaylists);
+  const clientId = useApp((s) => s.clientId);
+  const roomOwnerClientId = useApp((s) => s.roomOwnerClientId);
+  return useMemo(
+    () =>
+      mergePlaylistsFromState({
+        playlists,
+        othersPlaylists,
+        clientId,
+        roomOwnerClientId,
+      }),
+    [playlists, othersPlaylists, clientId, roomOwnerClientId],
+  );
+}

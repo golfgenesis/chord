@@ -1,46 +1,39 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { useApp, useIsRoomOwner } from "../store";
-import type { Playlist } from "../types";
+import { useApp, useMergedPlaylists } from "../store";
+import type { MergedPlaylist } from "../store";
 
 export function PlaylistPicker() {
-  const playlists = useApp((s) => s.playlists);
+  const merged = useMergedPlaylists();
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const setActivePlaylist = useApp((s) => s.setActivePlaylist);
   const createPlaylist = useApp((s) => s.createPlaylist);
-  const isOwner = useIsRoomOwner();
   const [creating, setCreating] = useState(false);
 
-  const active = playlists.find((p) => p.id === activePlaylistId) ?? null;
+  const active = merged.find((m) => m.playlist.id === activePlaylistId) ?? null;
 
   return (
     <div className="border-b border-line/40 bg-bg-soft/30">
       <div className="flex gap-2 overflow-x-auto px-4 py-2.5 no-scrollbar">
-        {playlists.map((p) => (
+        {merged.map((m) => (
           <PlaylistPill
-            key={p.id}
-            playlist={p}
-            active={activePlaylistId === p.id}
-            onClick={() => setActivePlaylist(p.id)}
+            key={m.playlist.id}
+            entry={m}
+            active={activePlaylistId === m.playlist.id}
+            onClick={() => setActivePlaylist(m.playlist.id)}
           />
         ))}
-        {isOwner && (
-          <button
-            onClick={() => setCreating(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/50 bg-brand-soft px-4 py-1.5 text-[13px] font-semibold text-brand transition hover:border-brand hover:bg-brand/15 active:scale-95"
-          >
-            <PlusIcon className="size-3.5" />
-            {playlists.length === 0 ? "สร้าง Playlist แรก" : "Playlist ใหม่"}
-          </button>
-        )}
-        {!isOwner && playlists.length === 0 && (
-          <span className="flex shrink-0 items-center rounded-full border border-line/60 bg-bg-soft/60 px-4 py-1.5 text-[12px] text-ink-mute">
-            เจ้าของห้องยังไม่ได้สร้าง Playlist
-          </span>
-        )}
+        {/* Anyone can spin up their own playlist now — no owner gate. */}
+        <button
+          onClick={() => setCreating(true)}
+          className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-brand/50 bg-brand-soft px-4 py-1.5 text-[13px] font-semibold text-brand transition hover:border-brand hover:bg-brand/15 active:scale-95"
+        >
+          <PlusIcon className="size-3.5" />
+          {merged.length === 0 ? "สร้าง Playlist แรก" : "Playlist ใหม่"}
+        </button>
       </div>
 
-      {active && <PlaylistHeader playlist={active} isOwner={isOwner} />}
+      {active && <PlaylistHeader entry={active} />}
 
       {creating && (
         <CreateSheet
@@ -56,11 +49,11 @@ export function PlaylistPicker() {
 }
 
 function PlaylistPill({
-  playlist,
+  entry,
   active,
   onClick,
 }: {
-  playlist: Playlist;
+  entry: MergedPlaylist;
   active: boolean;
   onClick: () => void;
 }) {
@@ -72,26 +65,31 @@ function PlaylistPill({
           ? "bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/10"
           : "border border-line/60 bg-bg-card/60 text-ink-dim hover:bg-bg-hover hover:text-ink"
       }`}
+      title={entry.isMine ? entry.displayName : `${entry.displayName} · ของคนอื่น`}
     >
-      <span className="font-semibold tracking-[-0.005em]">{playlist.name}</span>
+      <span className="font-semibold tracking-[-0.005em]">{entry.displayName}</span>
+      {!entry.isMine && (
+        <span
+          className={`rounded-full px-1.5 py-px text-[9px] font-bold uppercase tracking-[0.14em] ${
+            active ? "bg-white/25 text-white" : "border border-line/80 bg-bg-soft text-ink-mute"
+          }`}
+        >
+          คนอื่น
+        </span>
+      )}
       <span
         className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
           active ? "bg-white/25 text-white" : "bg-bg/60 text-ink-mute"
         }`}
       >
-        {playlist.songIds?.length ?? 0}
+        {entry.playlist.songIds?.length ?? 0}
       </span>
     </button>
   );
 }
 
-function PlaylistHeader({
-  playlist,
-  isOwner,
-}: {
-  playlist: Playlist;
-  isOwner: boolean;
-}) {
+function PlaylistHeader({ entry }: { entry: MergedPlaylist }) {
+  const { playlist, isMine } = entry;
   const renamePlaylist = useApp((s) => s.renamePlaylist);
   const deletePlaylist = useApp((s) => s.deletePlaylist);
   const [mode, setMode] = useState<"view" | "rename" | "confirmDelete">("view");
@@ -167,16 +165,16 @@ function PlaylistHeader({
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <h3 className="truncate font-display text-[17px] font-semibold leading-[1.5] tracking-tight text-ink sm:text-[19px] sm:leading-[1.4]">
-              {playlist.name}
+              {entry.displayName}
             </h3>
             <p className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.18em] text-ink-mute">
               {playlist.songIds?.length ?? 0} เพลง
-              {!isOwner && (
-                <span className="ml-2 text-ink-mute/80">· read-only</span>
+              {!isMine && (
+                <span className="ml-2 text-ink-mute/80">· ของคนอื่น · read-only</span>
               )}
             </p>
           </div>
-          {isOwner && (
+          {isMine && (
             <>
               <IconBtn
                 onClick={() => {

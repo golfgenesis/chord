@@ -12,6 +12,7 @@ export function useVisibleSongs(): Song[] {
   const favorites = useApp((s) => s.favorites);
   const latest = useApp((s) => s.latest);
   const playlists = useApp((s) => s.playlists);
+  const othersPlaylists = useApp((s) => s.othersPlaylists);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
 
   return useMemo(() => {
@@ -28,7 +29,19 @@ export function useVisibleSongs(): Song[] {
 
     if (tab === "playlists") {
       if (!activePlaylistId) return [];
-      const pl = playlists.find((p) => p.id === activePlaylistId);
+      // Active playlist may be ours OR someone else's in the same room.
+      // Look in our local list first, then fall through to the room's
+      // per-member entries.
+      let pl = playlists.find((p) => p.id === activePlaylistId) ?? null;
+      if (!pl) {
+        for (const list of Object.values(othersPlaylists)) {
+          const found = list.find((p) => p.id === activePlaylistId);
+          if (found) {
+            pl = found;
+            break;
+          }
+        }
+      }
       const base: Song[] = [];
       if (pl) {
         for (const id of pl.songIds) {
@@ -63,6 +76,7 @@ export function useVisibleSongs(): Song[] {
     favorites,
     latest,
     playlists,
+    othersPlaylists,
     activePlaylistId,
   ]);
 }
