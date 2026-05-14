@@ -1,63 +1,86 @@
 # Chord
 
-A fast, dark-mode PWA for searching, viewing, and sharing chord sheets with your band in real time — built on top of a 70k-song chord-image dataset scraped from chordtabs.in.th.
+A fast, dark-mode PWA for searching, viewing, and sharing chord sheets
+with your band in real time — built on top of a 70k-song chord-image
+dataset scraped from chordtabs.in.th.
 
-Target devices: **iPad** (singer's main view) and **mobile** (other band members watching the singer's pick).
+Target devices: **iPad** (singer's main view) and **mobile** (other band
+members watching the singer's pick).
 
 ## Highlights
 
-- Search across all 70k songs in real time (no API; in-memory linear scan, ~10–30 ms)
-- Tap a song → fullscreen chord image; PWA service worker caches images aggressively
-- **Realtime room sync**: 6-digit room code, when one device taps a song the rest see it
-- Latest (auto, FIFO max 30), Favorites (★), multiple Playlists
-- Persisted offline in IndexedDB (`idb-keyval`)
-- Virtualized list (`react-virtuoso`) — 70k rows scroll smoothly on mobile
+- Search across all 70k songs in real time (in-memory linear scan, ~10–30 ms)
+- Tap a song → fullscreen chord image; service worker caches images for
+  offline use; a one-tap "Download all" button pre-caches the entire
+  dataset (~2.5 GB) for travelling-without-Wi-Fi rehearsals
+- **Realtime room sync** via Firebase RTDB: 6-digit room code, when one
+  device taps a song the rest see it (with optional auto-open + OS push
+  notification, deep-linkable URL `/{room}/{songId}`)
+- **Per-client playlists**: every member's lists are merged into one
+  picker, owner-first; edits/reorder/delete are gated to your own lists
+- Latest (auto, FIFO), Favorites (★), multiple Playlists with drag-and-
+  drop reorder, persisted offline in IndexedDB (`idb-keyval`)
+- Virtualized list (`react-virtuoso`) — 70k rows scroll smoothly on iOS
 - Installable on iPad/iPhone home screen (PWA manifest + Apple meta tags)
 
 ## Stack
 
 - Vite 8 + React 19 + TypeScript
 - Tailwind CSS 3 (dark mode)
-- Zustand for state
-- react-virtuoso for the virtual list
-- Firebase Realtime Database for room sync (falls back to BroadcastChannel mock when not configured)
-- vite-plugin-pwa for service worker + manifest
+- Zustand for state, react-virtuoso for the virtual list
+- Firebase Realtime DB (room sync) + Firestore (per-client cross-device sync)
+- vite-plugin-pwa (custom SW under `injectManifest`)
 - idb-keyval for persisted favorites/playlists/latest
+- Cloudflare Pages Functions + R2 (image hosting, see DEPLOY.md)
 
 ## Get started
 
 ```powershell
 cd F:\chord
-npm install            # one-time
-npm run dev            # builds slim songs.json, then starts Vite on :5173
+npm install
+npm run dev          # rebuilds public/songs.bin, then starts Vite on :5173
 ```
 
-Open `http://localhost:5173` on your PC, or on the iPad use the LAN URL Vite prints (e.g. `http://192.168.0.174:5173`). Both PC and iPad must be on the same Wi-Fi.
+Open `http://localhost:5173` on your PC, or the LAN URL Vite prints
+(e.g. `http://192.168.0.174:5173`) on the iPad. Both devices need to be
+on the same Wi-Fi for the LAN URL.
 
-Production build:
+Production:
 
 ```powershell
-npm run build          # outputs to dist/
-npm run preview        # serves dist/ for smoke-testing
+npm run build          # tsc + Vite build → dist/
+npm run preview        # serve dist/ for smoke testing
 ```
 
 ## How rooms work
 
 - Every device generates and persists a 6-digit room code.
-- All devices using the **same code** see each other's selections.
-- Tap the room code in the top bar to edit it manually, or the refresh icon to randomize.
-- When a band member taps a song, the rest get a "นักร้องเลือก" banner they can tap to open that song.
-- The selecting device is highlighted in the brand color ("คุณเลือก").
-- The first device to enter a fresh room becomes the **owner**; others are **guests**. Only the owner can edit playlists — guests see the owner's playlists read-only.
+- Devices using the **same code** see each other's selections.
+- Tap the room code in the toolbar to edit it, or the refresh icon to
+  randomize.
+- When a band member taps a song, others auto-open the chord sheet (or
+  just get a notification if they turned auto-open off).
+- The first device into a fresh room becomes the **owner**; others are
+  **guests**. Both can create their own playlists; edits are gated to
+  what you own.
+- URLs are shareable: `/{roomCode}/{songId}` deep-links into the
+  fullscreen view.
 
-## Firebase setup (for real cross-device sync)
+See `CLAUDE.md` for the full sync architecture (Firebase RTDB layout,
+URL routing, picker view-state, etc.).
 
-Without these env vars the app falls back to a BroadcastChannel mock that only syncs across tabs on the **same browser** — fine for UI testing, useless for real bands.
+## Firebase setup
+
+Without the env vars below the app falls back to a `BroadcastChannel`
+mock that only syncs across tabs of the same browser — fine for UI
+testing, useless for a real band.
 
 1. Create a Firebase project at https://console.firebase.google.com
-2. Add a Web app — copy the config snippet
-3. Enable **Realtime Database** (not Firestore) — Build > Realtime Database > Create
-4. Set rules to allow anonymous reads/writes inside `rooms/`:
+2. Add a Web app; copy the config snippet.
+3. Enable **Realtime Database** (not Firestore... well, both — the per-
+   client sync uses Firestore too; both are auto-provisioned).
+4. RTDB security rules for `rooms/`:
+
    ```json
    {
      "rules": {
@@ -71,142 +94,153 @@ Without these env vars the app falls back to a BroadcastChannel mock that only s
      }
    }
    ```
-   (For tighter security, add rate limits or sign-in. The data is tiny and unprivileged — just a song id + name — so anonymous is acceptable for a band-internal tool.)
-5. Copy `.env.example` to `.env.local` and fill in the values from the Firebase config snippet.
-6. Restart `npm run dev`.
+
+5. Firestore rules for `clients/{clientId}`:
+
+   ```
+   match /clients/{clientId} {
+     allow read, write: if true;
+   }
+   ```
+
+   The app deliberately doesn't use Firebase Auth — `clientId` is a
+   random 8-char string in localStorage, so the doc is keyed by a
+   hard-to-guess ID rather than an authenticated user. See
+   `src/lib/cloudSync.ts`.
+6. Copy `.env.example` → `.env.local`; paste the config values.
+7. Restart `npm run dev`.
 
 ## Project layout
 
 ```
 F:\chord\
-├── data\                            # source dataset (gitignored, kept locally)
-│   ├── results.json                 # [{id, src, alt}, ...] (70,107 records)
-│   ├── results.jsonl                # raw line-per-record log (resumable scrape)
-│   └── archive\                     # one-shot artifacts from the build
-├── images\                          # 70,107 PNG chord sheets, ~4.94 GB (gitignored)
+├── data\                            # source dataset (gitignored)
+│   └── results.json                 # [{id, src, alt}, ...]
+├── images\                          # WebP chord sheets (gitignored, ~2.5 GB)
 ├── logs\                            # script run logs (gitignored)
-├── public\                          # webapp public assets
-│   ├── favicon.svg
-│   ├── newrelic.js
-│   └── songs.json                   # slim dataset, committed (generated)
-├── src\                             # React source
-│   ├── App.tsx
-│   ├── main.tsx
-│   ├── store.ts                     # Zustand store (state + persistence)
+├── functions\
+│   └── images\[[path]].ts           # Cloudflare Pages Function: R2 proxy
+├── public\
+│   ├── favicon.svg, icon.svg, robots.txt
+│   ├── _redirects                   # SPA fallback for Pages
+│   └── songs.bin                    # obfuscated dataset, committed
+├── src\
+│   ├── App.tsx, main.tsx
+│   ├── store.ts                     # Zustand: state + persistence
 │   ├── types.ts
-│   ├── components\
-│   │   ├── TopBar.tsx
-│   │   ├── NowPlaying.tsx
-│   │   ├── Tabs.tsx
-│   │   ├── PlaylistPicker.tsx
-│   │   ├── SongList.tsx
-│   │   └── Fullscreen.tsx
-│   └── lib\
-│       ├── firebase.ts              # Realtime DB sync + BroadcastChannel fallback
-│       ├── persist.ts               # IndexedDB + localStorage helpers
-│       ├── search.ts                # in-memory search
-│       └── imageUrl.ts
+│   ├── sw.ts                        # custom service worker
+│   ├── components\                  # TopBar, NowPlaying, Tabs, SongList,
+│   │                                # Fullscreen, PlaylistPicker, OfflineSheet,
+│   │                                # RoomControls
+│   ├── hooks\                       # useVisibleSongs, useRoomSongAlert
+│   └── lib\                         # firebase, cloudSync, persist, search,
+│                                    # songsCodec, imageUrl, offlineDownload
 ├── scripts\
-│   ├── build-data.mjs               # slims data/results.json → public/songs.json
-│   ├── scrape.py                    # fetch HTML + extract <img src/alt>
-│   ├── download.py                  # download images to images\
-│   ├── sync_names.py                # keep alt <-> filename in sync
-│   ├── upload_r2.py                 # bulk-upload images/ to Cloudflare R2
-│   ├── check_missing.py             # audit songs.json ↔ R2 ↔ local disk
-│   ├── scan_weird_chars.py          # find invisible control chars in titles
-│   └── publish.ps1                  # end-to-end deploy
-├── vite.config.ts
-├── tsconfig*.json
-├── tailwind.config.js, postcss.config.js, eslint.config.js
-└── package.json
+│   ├── _env.py                      # loads .env.local into os.environ
+│   ├── _r2.py                       # boto3 R2 client factory
+│   ├── scrape.py                    # fetch chordtabs HTML → results.json
+│   ├── download.py                  # PNG downloader (source format)
+│   ├── sync_names.py                # rectify alt ↔ filename (PNG stage)
+│   ├── convert_to_webp.py           # PNG → WebP in place, delete source
+│   ├── upload_r2.py                 # bulk upload to R2 (resumable)
+│   ├── scan_weird_chars.py          # spot invisible control chars in titles
+│   ├── build-data.mjs               # results.json → public/songs.bin
+│   └── pipeline.ps1                 # one-shot: upload + build + push
+├── .env.example, .env.local (gitignored)
+└── CLAUDE.md, DEPLOY.md, README.md
 ```
 
 ## Images
 
-- **Dev:** served by Vite middleware from `F:\chord\images` at `/images/*`.
-- **Prod:** set `VITE_IMAGE_BASE` to your CDN/origin (e.g. `https://cdn.you.com/chord`). The app fetches `${VITE_IMAGE_BASE}/${encodeURIComponent(file)}`.
+The image source files on disk are **WebP** (near-lossless q=80 — see
+`scripts/convert_to_webp.py`). Original PNGs from chordtabs.in.th are
+downloaded by `download.py` then replaced in place by the convert step.
+
+| Environment | How images are served |
+|---|---|
+| **Dev** | Vite serves them via `imagesMiddleware` in `vite.config.ts` from `F:\chord\images` at `/images/*` (same origin). Or, set `VITE_IMAGE_BASE` to the R2 Public Development URL to hit R2 directly. |
+| **Prod (Cloudflare Pages)** | The Pages Function at `functions/images/[[path]].ts` proxies R2 over the **same origin** as the app. No `VITE_IMAGE_BASE` needed — the default `/images/` path goes straight to the function. Same-origin avoids Chrome's "opaque-response padding" tax that would balloon the offline cache from ~3 GB to ~500 GB. |
+
+The bucket needs an R2 binding wired up in Pages settings; see
+`DEPLOY.md` for the click-by-click.
 
 ## Adding new songs
 
-```powershell
-# scrape additional pages
-python F:\chord\scripts\scrape.py --start 70570 --end 75000
-python F:\chord\scripts\download.py
-python F:\chord\scripts\sync_names.py
+Full pipeline, each step resumable:
 
-# rebuild the webapp's slim JSON (npm run dev/build also runs this)
-npm run data
+```powershell
+py scripts\scrape.py --start 70570 --end 75000
+py scripts\download.py
+py scripts\sync_names.py            # PNG stage only — rectify alt ↔ filename
+py scripts\convert_to_webp.py       # in-place PNG → WebP, deletes source PNG
+scripts\pipeline.ps1 -Message "data: add songs 70570..75000"
 ```
+
+`pipeline.ps1` runs: `upload_r2.py` → `npm run data` (rebuild
+`public/songs.bin`) → `git commit && git push`. Cloudflare Pages
+auto-deploys within ~60 s.
+
+R2 credentials live in `.env.local`:
+
+```
+R2_ACCESS_KEY=...
+R2_SECRET_KEY=...
+```
+
+Python scripts auto-load these via `scripts/_env.py` — no need to
+re-export `$env:R2_*` every shell session.
 
 ## Install on iPad
 
-1. Open the LAN URL in Safari.
+1. Open the LAN URL (or production URL) in Safari.
 2. Share menu → "Add to Home Screen".
-3. Launch from the home-screen icon — you get a fullscreen app with the dark UI, no Safari chrome.
+3. Launch from the icon — fullscreen, dark UI, no Safari chrome.
 
----
+PWA install also unlocks **persistent storage** on iOS, which is what
+keeps the 70k-image offline cache from being evicted when iOS runs low
+on disk.
 
-## Data pipeline (the dataset behind the app)
+## Data pipeline details
 
-All scrape/download/sync scripts compute paths relative to `PROJECT_ROOT` (= `F:\chord`), so the whole folder can be moved or renamed without code changes.
+All scripts compute paths relative to `PROJECT_ROOT` (the parent of
+`scripts/`), so the whole folder can be moved without code changes.
 
-### Scrape new pages (e.g. ids beyond 70569)
+### Dataset shape (results.json)
 
-```powershell
-$env:PYTHONIOENCODING = "utf-8"
-python F:\chord\scripts\scrape.py --start 70570 --end 75000
-```
-
-The script appends to `data\results.jsonl` (resumable) and rewrites `data\results.json` at the end. It skips ids that are already done.
-
-### Download newly-scraped images
-
-```powershell
-python F:\chord\scripts\download.py
-```
-
-Skips files that already exist on disk. Use `--test N` to dry-run on the first N records.
-
-### Re-sync alt fields to filenames (after re-scrape)
-
-```powershell
-python F:\chord\scripts\sync_names.py --dry-run    # preview
-python F:\chord\scripts\sync_names.py              # apply
-```
-
-Backs up the previous `results.json` to `data\archive\results.before_sync.json`.
-
-### Dataset shape
-
-Each record in `results.json`:
 ```json
-{
-  "id": 1,
-  "src": "https://chordtabs.in.th/img/nm/c0000101.png",
-  "alt": "คอร์ด คำสาป Playground"
-}
+{ "id": 1, "src": "https://chordtabs.in.th/img/nm/c0000101.png",
+  "alt": "คอร์ด คำสาป Playground" }
 ```
 
-Filename rule (used when downloading):
-- Strip `"คอร์ด "` prefix from `alt`
-- Sanitize for Windows (`< > : " / \ | ? *` → `_`)
-- If the cleaned name collides case-insensitively with another record, append `_{id}`
-- `.png` extension
+`build-data.mjs` slims this down to `{id, name}` (strips the prefix +
+sanitises the filename), then XOR+gzip-obfuscates it as
+`public/songs.bin`. The image URL is reconstructed at runtime via
+`src/lib/imageUrl.ts` (`${BASE}/${encodeURIComponent(name)}.webp`).
 
-After `sync_names.py`, every record's `alt` minus `"คอร์ด "` matches its filename on disk exactly (sans extension).
+### Filename rule
+
+- Strip the `"คอร์ด "` prefix from `alt`
+- Sanitize Windows-illegal chars (`< > : " / \ | ? *`) → `_`
+- If the cleaned name collides case-insensitively with another record,
+  append `_{id}` to disambiguate
+- Extension is `.webp` (source on disk and on R2)
+
+`sync_names.py` enforces this exact mapping between filenames and `alt`
+fields — important to keep them in lockstep so the `imageUrl()` function
+in JS can reconstruct the right URL.
 
 ### Counts
 
 | | |
 |---|---|
-| Pages scraped (1..70569)  | 70,569 |
+| Pages scraped (1..70569) | 70,569 |
 | Records with a real image | 70,107 |
-| Image files on disk       | 70,107 |
-| Total image size          | 4.94 GB |
-| Duplicate-name records    | 2,162 (use `_{id}` suffix) |
+| WebP files on disk + R2 | 70,107 |
+| Total image size (WebP @ q=80) | ~2.5 GB |
+| Duplicate-name records | 2,162 (use `_{id}` suffix) |
 
 ### Python deps
 
 ```powershell
-python -m pip install requests beautifulsoup4 lxml boto3
+py -m pip install requests beautifulsoup4 lxml boto3 tqdm
 ```

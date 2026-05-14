@@ -1,5 +1,6 @@
 # Bulk data — kept locally, not in repo
 /images
+/images-webp
 /data
 /logs
 

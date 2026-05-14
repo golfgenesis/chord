@@ -54,9 +54,9 @@ When a URL-specified room differs from the cloud-synced one, the URL wins. The `
 
 ### Service worker
 
-Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `generateSW`). Two notable behaviors:
+Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `generateSW`). Notable behavior:
 
-- **PNG → WebP transcode at cache time** via `cacheWillUpdate` workbox plugin + `OffscreenCanvas.convertToBlob`. Origin files stay PNG; the user's local cache stores the smaller WebP, so more sheets fit before quota.
+- Chord images are served as WebP directly from R2 (the source set under `images/` is already WebP). The SW runs no image transcoding — earlier versions had a PNG→WebP `cacheWillUpdate` plugin, but it was the dominant bottleneck during the 70k offline bulk-download. Don't reintroduce it.
 - **`notificationclick` handler** focuses an existing tab and `client.navigate(data.url)` to the embedded room/song URL, or `clients.openWindow` if nothing is open. Deep-links bandmates straight to the song someone just picked.
 
 ### Notifications
@@ -80,14 +80,21 @@ These are deliberate workarounds, not cargo-cult — please don't remove without
 
 ## Production hosting
 
-`public/_redirects` (`/* /index.html 200`) handles SPA fallback for Cloudflare Pages / Netlify. GitHub Pages needs a different trick. Images: set `VITE_IMAGE_BASE=https://cdn.example.com/chord` for production; in dev they're served by the `imagesMiddleware` plugin in [vite.config.ts](vite.config.ts) from `F:\chord\images`.
+`public/_redirects` (`/* /index.html 200`) handles SPA fallback for Cloudflare Pages / Netlify; GitHub Pages would need a different trick.
 
-## Project layout notes vs. README
+Images: production serves them through [functions/images/[[path]].ts](functions/images/[[path]].ts) (a Cloudflare Pages Function bound to the R2 bucket via the `IMAGES` variable) at the same origin as the app. **Do not set `VITE_IMAGE_BASE` in the Pages dashboard** — it'd point the image fetches cross-origin and re-introduce Chrome's opaque-response padding tax. `src/lib/imageUrl.ts` defaults to `/images/`, which is what the function handles. Dev can optionally set `VITE_IMAGE_BASE` to an R2 Public Development URL to skip the local `imagesMiddleware`.
 
-- The webapp moved from `webapp/` up to project root — paths in [README.md](README.md) match the current layout but some script docs (`F:\chord\webapp\...`) are stale.
-- `public/songs.json` no longer exists at runtime. The payload is `public/songs.bin` (obfuscated). README still says JSON in places.
-- Components: `RoomControls.tsx` was extracted from `TopBar.tsx` and is now rendered next to `Tabs.tsx` (it owns the room-code badge + randomize button, with click-outside cancel + clear-input X). Install, Share, and the AutoOpen toggle live in `TopBar.tsx`.
-- Hooks: `useVisibleSongs.ts` (search/filter logic, looks up the active playlist across both `playlists` and `othersPlaylists`) and `useRoomSongAlert.ts` (auto-open + notifications + picker close sync) — both in `src/hooks/`.
+The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/convert_to_webp.py` converts in place and deletes the source PNG. `src/sw.ts` no longer transcodes at runtime (the encode step was the dominant bottleneck of the 70k offline bulk download).
+
+## Scripts layout
+
+- `scripts/_env.py` — auto-loads `.env.local` into `os.environ`. Imported transitively by every Python script that needs credentials.
+- `scripts/_r2.py` — shared boto3 R2 client factory + `BUCKET` constant. Reads `R2_ACCESS_KEY` / `R2_SECRET_KEY` / `R2_ENDPOINT` / `R2_BUCKET` from env (which `_env.py` populated from `.env.local`).
+- **`scripts/sync.py`** — Python one-stop pipeline. Auto-detects the next scrape start id from `results.json`; orchestrates scrape → download → sync-names → convert → upload → verify → build → (optional) git push. Run as `py scripts/sync.py --end <last_id> --push`. Each underlying step still runs as a subprocess of its existing script, so they stay independently testable.
+- **`scripts/check_sync.py`** — standalone verifier: cross-checks `data/results.json` vs local `images/` vs R2 bucket. Reports missing-locally / missing-on-R2 / orphans, and can delete orphans with `--delete-orphans`. Exit 0 if everything matches, 1 otherwise (useful in pre-push hooks).
+- `scripts/pipeline.ps1` — older PowerShell wrapper. Only runs upload + build + push (no scrape/download/convert) and uses `py` autodetect. **`sync.py` supersedes it for the full pipeline**; `pipeline.ps1` is kept for back-compat with anyone who has scripts wired into it.
+- **Do NOT add `publish.ps1` or `check_missing.py` back** — both were removed because they built/checked the legacy `songs.json` (no longer exists), and the `file` field they referenced was never written by the current `build-data.mjs`.
+- Sequencing when adding new songs (manually, if not using `sync.py`): `scrape.py` → `download.py` (PNG) → `sync_names.py` (still PNG-stage) → `convert_to_webp.py` (PNG→WebP, deletes source) → `upload_r2.py images/` → `check_sync.py` → `node scripts/build-data.mjs`. Running `sync_names.py` after conversion will report 70k "missing" files because it only knows about `.png`.
 
 ## Sync API contract
 

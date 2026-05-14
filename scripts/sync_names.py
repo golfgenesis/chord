@@ -1,6 +1,13 @@
 """
 Sync filenames <-> alt in results.json.
 
+WHEN TO RUN: only at the PNG stage, immediately after `download.py`. The
+script expects `.png` files in `images/` and will report 70k "missing"
+files if you run it after `convert_to_webp.py` has already replaced
+them with `.webp`. The pipeline order is:
+
+    scrape.py → download.py → [sync_names.py] → convert_to_webp.py → upload_r2.py
+
 Rule:
 - For duplicate-alt records (file has _{id} suffix): update results.json alt
   to "คอร์ด {cleaned_alt}_{id}" so alt matches filename.

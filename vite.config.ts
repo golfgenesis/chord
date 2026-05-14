@@ -27,7 +27,7 @@ function imagesMiddleware(): Plugin {
               res.statusCode = 404;
               return res.end("not found");
             }
-            res.setHeader("Content-Type", "image/png");
+            res.setHeader("Content-Type", "image/webp");
             res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
             fs.createReadStream(filePath).pipe(res);
           } catch (err) {
@@ -45,8 +45,8 @@ export default defineConfig({
     imagesMiddleware(),
     VitePWA({
       // We write our own service worker (src/sw.ts) instead of letting workbox
-      // generate one, because we need a custom runtime plugin that transcodes
-      // PNG images to WebP at cache time — see src/sw.ts.
+      // generate one so we can wire custom routing/caching for the chord-image
+      // CDN and notification handling.
       strategies: "injectManifest",
       srcDir: "src",
       filename: "sw.ts",
@@ -80,6 +80,18 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+      },
+      // Without this the service worker only runs after `vite build`,
+      // which means Chrome's PWA criteria are unmet on localhost and
+      // `beforeinstallprompt` never fires — so the Install button stays
+      // hidden in dev, AND offline-mode pre-cache can never work because
+      // there's no SW to intercept the fetches. `type: "module"` is
+      // required because our SW is a .ts file (ESM); `navigateFallback`
+      // makes the dev SW behave like the prod one for SPA routing.
+      devOptions: {
+        enabled: true,
+        type: "module",
+        navigateFallback: "index.html",
       },
     }),
   ],

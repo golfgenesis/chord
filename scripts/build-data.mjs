@@ -5,9 +5,11 @@
 //   results.json record: { id, src, alt: "คอร์ด คำสาป Playground" }
 //   slim record:         { id, name: "คำสาป Playground" }
 //
-// The image file is always `${name}.png` (see src/lib/imageUrl.ts) — keeping
-// it out of the payload saves ~30% on the wire. Filename rules mirror Python
-// sync_names.py exactly.
+// The image file is always `${name}.webp` (see src/lib/imageUrl.ts) — keeping
+// it out of the payload saves ~30% on the wire. The on-disk dataset under
+// `images/` is the WebP set that R2 actually serves. Filename rules
+// (Windows-sanitization, "_${id}" disambiguation on case-insensitive
+// collisions) mirror Python sync_names.py exactly.
 //
 // Wire format (public/songs.bin):  XOR(gzip(JSON), KEY)
 // The same KEY is hard-coded in src/lib/songsCodec.ts — if you change one,

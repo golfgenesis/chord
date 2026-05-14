@@ -1,6 +1,12 @@
 """
 Download all chord images from results.json.
 
+Source format from chordtabs.in.th is PNG; this script saves PNGs to
+`images/`. The next step in the pipeline (convert_to_webp.py) replaces
+each PNG with a WebP in place and deletes the source. Don't be surprised
+when `images/` looks empty of PNGs between runs — that's expected after
+conversion.
+
 - Filename = alt with "คอร์ด " prefix stripped, sanitized for Windows
 - If multiple records share the same cleaned alt, append "_{id}" to disambiguate
 - Saves to OUT_DIR
@@ -10,7 +16,7 @@ Download all chord images from results.json.
 
 Run:
   python download.py --test 2          # try 2 records, print what would happen + actually download them
-  python download.py                   # full run (70,107 images)
+  python download.py                   # full run
   python download.py --workers 6       # adjust concurrency
 """
 

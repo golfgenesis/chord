@@ -1,195 +1,170 @@
 # Deploy to Cloudflare Pages + R2
 
-This webapp lives in a Git repo; images live in R2; everything stitches together
-via env vars at build time.
-
 ```
-GitHub repo (F:\chord\)        Cloudflare R2 (chord-images/)
-   ├ src/                        70,107 PNG files
-   ├ public/songs.json (~10MB)
+GitHub repo (F:\chord\)         Cloudflare R2  (chord-images)
+   ├ src/                          70k WebP files (~2.5 GB)
+   ├ public/songs.bin (~1.4 MB)
+   ├ functions/images/[[path]].ts  ← Pages Function: proxies R2 same-origin
    ├ scripts/
    └ ...
         │                                │
         ▼                                ▼
-   Cloudflare Pages           images.you.com (custom domain)
+   Cloudflare Pages          (no public bucket URL needed)
    chord.you.com                    │
         │                            │
-        └──── <img src="${VITE_IMAGE_BASE}/{file}.png"> ───┘
+        └──── <img src="/images/{name}.webp"> ──→ Pages Function ──→ R2 ──┘
 ```
+
+Images are proxied through the Pages Function `functions/images/[[path]].ts`
+so the browser sees them as same-origin. That avoids cross-origin opaque
+responses (and Chrome's 1-7 MB-per-entry "side-channel padding" tax that
+would make the 70k offline cache balloon from ~3 GB to ~500 GB).
 
 ## Privacy reality check
 
-`songs.json` is downloaded by the browser to power search, so it's accessible
-to anyone who can open the site. Three levels of protection, from easy to hard:
+`songs.bin` is an XOR+gzip-obfuscated copy of the song titles dataset.
+It's downloaded by the browser to power search, so anyone who reverse-
+engineers the bundle can decode it. The obfuscation only stops trivial
+`curl | jq` scraping. Three levels, easy → hard:
 
-1. **Public (default)** — anyone can curl `chord.you.com/songs.json`.
-2. **Hotlink protection** — Cloudflare WAF rule blocks requests whose Referer
-   isn't your own domain. Stops bot scrapers and embeds. ~5 minutes to set up.
-3. **Auth-gated Worker** — replace `songs.json` with a Worker endpoint that
-   verifies a Firebase ID token before responding. Tighter but adds complexity.
+1. **Public (default)** — anyone can curl `chord.you.com/songs.bin`.
+2. **Hotlink protection** — Cloudflare WAF rule blocking requests whose
+   Referer isn't your own domain. Stops bots + embeds. ~5 min to set up.
+3. **Auth-gated Worker** — replace `songs.bin` with a Worker endpoint
+   that verifies a Firebase ID token before responding.
 
-Recommended: start with **Public**, layer on **Hotlink protection** if needed.
+Recommended: start with Public, add Hotlink protection if needed.
 
 ---
 
 ## Step 1 — Prepare the Git repo
 
-The repo root is `F:\chord\`. The bulk data (`data/`, `images/`, `logs/`) is
-gitignored — only the webapp source + the slim `public/songs.json` is committed.
+The repo root is `F:\chord\`. Bulk data (`data/`, `images/`, `logs/`) is
+gitignored — only the webapp + the obfuscated `public/songs.bin` is
+committed.
 
 ```powershell
 cd F:\chord
-
-# Rebuild songs.json from the source data so the committed copy is fresh.
-npm run data
-
-# Initialize Git (only if not already a repo).
+npm run data                 # build public/songs.bin from data/results.json
 git init -b main
 git add .
 git commit -m "Initial commit: Chord webapp"
-```
 
-Create a new private repo on GitHub, then:
-
-```powershell
+# Create a private repo on GitHub then:
 git remote add origin git@github.com:<you>/chord.git
 git push -u origin main
 ```
 
-**Reminder**: `.env.local` is gitignored — your Firebase keys never leave your
-machine. You'll set them as Pages env vars in step 2.
+`.env.local` is gitignored — Firebase keys + R2 credentials never leave
+your machine. You'll set them again as Pages env vars below.
 
 ---
 
 ## Step 2 — Connect Cloudflare Pages
 
-1. Cloudflare Dashboard → **Workers & Pages** → **Create application** → Pages →
-   **Connect to Git** → pick your repo.
+1. **Workers & Pages → Create application → Pages → Connect to Git** → pick
+   your repo.
 2. Build settings:
-   - **Framework preset**: Vite
-   - **Build command**: `npm run build`
-   - **Build output directory**: `dist`
-   - **Root directory**: leave blank (the repo root is the webapp).
-3. Environment variables (Production + Preview):
+   - **Framework preset:** Vite
+   - **Build command:** `npm run build`
+   - **Build output:** `dist`
+   - **Root directory:** blank
+3. **Environment variables** (Production + Preview):
    ```
-   VITE_IMAGE_BASE              https://images.you.com   (set after step 4)
    VITE_FIREBASE_API_KEY        AIza...
    VITE_FIREBASE_AUTH_DOMAIN    chord-1a556.firebaseapp.com
    VITE_FIREBASE_PROJECT_ID     chord-1a556
    VITE_FIREBASE_APP_ID         1:...
    VITE_FIREBASE_DB_URL         https://chord-1a556-default-rtdb.asia-southeast1.firebasedatabase.app
    ```
+   **Do NOT set `VITE_IMAGE_BASE`** — leave it unset. `src/lib/imageUrl.ts`
+   defaults to `/images`, which is the same-origin path served by the
+   Pages Function. If you set a CDN URL here, the cross-origin opaque-
+   padding tax comes back.
 4. Save & deploy. First build takes 1–2 minutes.
 
 The site is live at `https://<project>.pages.dev`. Bind a custom domain
-under **Custom domains** when ready (e.g., `chord.you.com`).
-
-### Add Firebase auth domains
-
-In **Firebase Console → Authentication → Settings → Authorized domains**, add:
-- `<project>.pages.dev`
-- `chord.you.com` (your custom domain)
-
-Otherwise anonymous sign-in is blocked from the deployed site.
+under **Custom domains** when ready.
 
 ---
 
-## Step 3 — Create the R2 bucket
+## Step 3 — Create the R2 bucket + Pages binding
 
-1. Cloudflare Dashboard → **R2** → **Create bucket** → name it `chord-images`.
-2. **Settings** tab → **Public access** → enable **Public access via custom
-   domain** (don't use the `*.r2.dev` URL; it's rate-limited).
-3. Click **Connect Domain** → pick `images.you.com` (must be a domain you
-   already host on Cloudflare). DNS is wired up automatically.
+1. **R2 → Create bucket** → name it `chord-images`.
+2. **Pages project → Settings → Functions → R2 bucket bindings →
+   Add binding**:
+   - **Variable name:** `IMAGES`
+   - **R2 bucket:** `chord-images`
+3. (Optional, for dev only) R2 bucket → Settings → **Public Development
+   URL** → enable. Copy that URL into `.env.local` as `VITE_IMAGE_BASE`
+   so local dev hits R2 directly (no Pages Function locally).
+   - The bucket's CORS Policy needs `AllowedOrigins: ["*"]` for the public
+     dev URL to honour preflight on dev origins.
+
+The Pages Function reads from the `IMAGES` binding directly (no HTTP
+request to R2), so no R2 custom domain or public URL is needed for
+production.
 
 ---
 
-## Step 4 — Upload the 70k images
+## Step 4 — Convert PNGs to WebP + upload to R2
 
-The repo includes `scripts/upload_r2.py` (boto3 + threaded, resumable). Manual
-upload via the web UI will not scale; you can also use rclone if you prefer.
+The full data pipeline lives in `scripts/`. Each step is resumable —
+Ctrl-C anytime, re-run, nothing is repeated.
 
-### Get an R2 token
-
-R2 dashboard → **Manage R2 API Tokens** → **Create API Token** → permission
-**Object Read & Write** scoped to bucket `chord-images`. Copy:
-- Access Key ID
-- Secret Access Key
-
-### Upload via the Python script (recommended)
+### One-time setup
 
 ```powershell
-pip install boto3
-
-$env:R2_ACCESS_KEY = "<paste>"
-$env:R2_SECRET_KEY = "<paste>"
-python F:\chord\scripts\upload_r2.py
+pip install boto3                              # for upload_r2.py
+# Download cwebp from https://developers.google.com/speed/webp/download
+# Unzip, place cwebp.exe on PATH, OR set $env:CWEBP to its full path.
 ```
 
-It lists what's already in R2 first and only uploads new files (16 concurrent
-workers, cache headers set for 1 year). Re-run anytime to sync incremental
-uploads — it's resume-safe.
+Add R2 credentials to `.env.local` (Python scripts auto-load it via
+`scripts/_env.py`):
 
-### Or, via rclone
+```
+R2_ACCESS_KEY=...
+R2_SECRET_KEY=...
+```
+
+Get them from **R2 → Manage R2 API Tokens → Create API Token**
+(Object Read & Write scoped to `chord-images`).
+
+### Run the pipeline
 
 ```powershell
-winget install rclone.rclone
-rclone config        # set up a remote "r2" pointing at the R2 endpoint
-rclone copy "F:\chord\images" r2:chord-images `
-  --transfers 16 --checkers 32 --progress `
-  --header-upload "Cache-Control: public, max-age=31536000, immutable"
+# Already have PNGs in F:\chord\images? Convert in place (deletes
+# the source PNG after each successful encode):
+py F:\chord\scripts\convert_to_webp.py
+
+# Upload + rebuild songs.bin + git push in one shot:
+F:\chord\scripts\pipeline.ps1
 ```
 
-About 70k files / ~5 GB. On a 100 Mbps upload it's ~10–15 minutes. Both methods
-are resume-safe.
+`pipeline.ps1` runs three steps:
+
+1. `upload_r2.py F:\chord\images` — only uploads new files
+2. `npm run data` — rebuilds `public/songs.bin`
+3. `git add … && git commit && git push` — Cloudflare Pages auto-deploys
+   within ~60 seconds
+
+Flags: `-SkipUpload`, `-SkipBuild`, `-SkipPush`, `-DryRun`, `-Message`.
 
 ---
 
-## Step 5 — (Optional) Hotlink protection
-
-To block requests where the Referer isn't your site:
-
-1. Cloudflare Dashboard → your domain → **Rules** → **Transform Rules** →
-   **Modify Response Header**, or use **WAF → Custom rules**.
-2. Add a rule on `images.you.com`:
-   ```
-   Field:    Referer
-   Operator: does not start with
-   Value:    https://chord.you.com
-   Action:   Block
-   ```
-3. Also add an exception so direct browser opens still work if you want, or
-   leave them blocked.
-
-This blocks bots and embeds from other sites. Determined scrapers can fake
-the Referer, but it stops the lazy 95%.
-
----
-
-## Step 6 — Routine workflow
-
-**New songs added (you scraped more pages):**
+## Step 5 — Adding new songs later
 
 ```powershell
-# Python pipeline (still in scripts/, same as before)
-python F:\chord\scripts\scrape.py --start <X> --end <Y>
-python F:\chord\scripts\download.py
-python F:\chord\scripts\sync_names.py
-
-# Rebuild the slim JSON, commit, push.
-cd F:\chord
-npm run data
-git add public/songs.json
-git commit -m "data: add songs <X>..<Y>"
-git push
-
-# Upload the new images.
-python F:\chord\scripts\upload_r2.py
+py F:\chord\scripts\scrape.py --start <X> --end <Y>   # new pages → results.json
+py F:\chord\scripts\download.py                       # new PNGs into images/
+py F:\chord\scripts\sync_names.py                     # rectify alt ↔ filename (PNG stage)
+py F:\chord\scripts\convert_to_webp.py                # PNGs → WebPs in place, delete PNG
+F:\chord\scripts\pipeline.ps1 -Message "data: add songs <X>..<Y>"
 ```
 
-Or use `scripts/publish.ps1` to do steps 2–4 in one shot.
-
-Cloudflare Pages auto-builds and deploys within ~60 seconds of your push.
+Each step skips work that's already done, so re-running after a Ctrl-C
+just picks up where it left off.
 
 ---
 
@@ -197,8 +172,7 @@ Cloudflare Pages auto-builds and deploys within ~60 seconds of your push.
 
 | Script | Purpose |
 |---|---|
-| `scripts/check_missing.py` | Cross-check `public/songs.json` ↔ R2 ↔ local `images/`. Reports missing/orphan entries. |
-| `scripts/scan_weird_chars.py` | Scan `data/results.json` + `public/songs.json` for invisible control / format chars in titles. |
+| `scripts/scan_weird_chars.py` | Scan `data/results.json` for invisible control / format chars in titles. Run after a fresh scrape. |
 
 ---
 
@@ -206,9 +180,11 @@ Cloudflare Pages auto-builds and deploys within ~60 seconds of your push.
 
 | Item | Location | In Git? | Notes |
 |---|---|---|---|
-| Webapp source | `F:\chord\src\` | yes | |
-| Slim dataset | `public/songs.json` | yes | ~10MB, regenerate with `npm run data` |
-| Raw scraped JSON | `F:\chord\data\results.json` | **no** | source of truth, stays local |
-| Image files | `F:\chord\images\` | **no** | uploaded to R2 separately |
-| Python scrape scripts | `F:\chord\scripts\` | yes | committed alongside webapp |
-| Firebase credentials | `.env.local` | **no** | re-enter as Pages env vars |
+| Webapp source | `src/` | yes | |
+| Pages Function (R2 proxy) | `functions/images/[[path]].ts` | yes | Reads R2 via `IMAGES` binding |
+| Songs payload | `public/songs.bin` | yes | XOR+gzip, ~1.4 MB; rebuild with `npm run data` |
+| Raw scraped JSON | `data/results.json` | **no** | source of truth, stays local |
+| Image files | `images/` | **no** | WebP, uploaded to R2 separately |
+| Python scripts | `scripts/` | yes | committed alongside webapp |
+| Shared helpers | `scripts/_env.py`, `scripts/_r2.py` | yes | env loader + R2 client factory |
+| Credentials | `.env.local` | **no** | R2 + Firebase, re-enter as Pages env vars |

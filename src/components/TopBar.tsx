@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
+import { isInstalledPWA, isIOS } from "../lib/platform";
+import { CheckIcon, ShareIcon, XIcon } from "./icons";
+import { OfflineButton } from "./OfflineSheet";
 
 // Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
 interface BeforeInstallPromptEvent extends Event {
@@ -45,6 +48,7 @@ export function TopBar() {
 
         <div className="flex shrink-0 items-center gap-1.5">
           <InstallButton />
+          <OfflineButton />
           <AutoOpenButton />
           <ShareButton roomCode={roomCode} />
         </div>
@@ -115,38 +119,6 @@ function SearchIcon({ className = "" }: { className?: string }) {
     >
       <circle cx="11" cy="11" r="7" />
       <path d="m21 21-4.3-4.3" />
-    </svg>
-  );
-}
-
-function XIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M5 12.5 10 17.5 19 7.5" />
     </svg>
   );
 }
@@ -226,22 +198,8 @@ function InstallButton() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   // Lazy initializers — these are synchronous browser checks, not external
   // subscriptions, so they belong in render init rather than an effect.
-  const [hidden, setHidden] = useState(
-    () =>
-      window.matchMedia("(display-mode: standalone)").matches ||
-      (navigator as { standalone?: boolean }).standalone === true,
-  );
-  const [isIOS] = useState(() => {
-    // Since iOS 13, iPad Safari reports its user agent as desktop Mac (Apple
-    // calls this "request desktop site by default"). So the legacy regex
-    // misses iPads. Catch the new shape by combining the Mac UA with
-    // touch-point support — desktop Macs have 0 touch points, iPads have 5.
-    const ua = navigator.userAgent;
-    if (/iPhone|iPod/.test(ua)) return true;
-    if (/iPad/.test(ua)) return true;
-    if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return true;
-    return false;
-  });
+  const [hidden, setHidden] = useState(isInstalledPWA);
+  const [ios] = useState(isIOS);
   const [showIOSSheet, setShowIOSSheet] = useState(false);
 
   useEffect(() => {
@@ -265,7 +223,7 @@ function InstallButton() {
   if (hidden) return null;
   // Chrome on desktop without PWA criteria met → hide silently. Only show
   // when we actually have something useful to do.
-  if (!deferred && !isIOS) return null;
+  if (!deferred && !ios) return null;
 
   async function install() {
     if (deferred) {
@@ -275,7 +233,7 @@ function InstallButton() {
       setDeferred(null);
       return;
     }
-    if (isIOS) setShowIOSSheet(true);
+    if (ios) setShowIOSSheet(true);
   }
 
   return (
@@ -322,7 +280,7 @@ function IOSInstallSheet({ onClose }: { onClose: () => void }) {
             <span className="flex flex-wrap items-center gap-1.5">
               แตะปุ่มแชร์
               <span className="inline-grid size-7 place-items-center rounded-md border border-line/80 bg-bg-card text-ink-dim">
-                <SafariShareIcon />
+                <ShareIcon className="size-4" />
               </span>
               ในแถบล่างของ Safari
             </span>
@@ -372,25 +330,6 @@ function InstallIcon({ className = "size-[18px]" }: { className?: string }) {
   );
 }
 
-function SafariShareIcon() {
-  // Mini replica of iOS's share glyph so users recognize it visually.
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-4"
-    >
-      <path d="M12 3v12" />
-      <path d="m8 7 4-4 4 4" />
-      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
-    </svg>
-  );
-}
-
 function ShareButton({ roomCode }: { roomCode: string }) {
   // After a successful copy, flash a check mark for a moment so the user
   // gets visual feedback even when the native share sheet didn't open
@@ -436,20 +375,3 @@ function ShareButton({ roomCode }: { roomCode: string }) {
   );
 }
 
-function ShareIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M12 3v12" />
-      <path d="m8 7 4-4 4 4" />
-      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
-    </svg>
-  );
-}

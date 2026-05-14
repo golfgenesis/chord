@@ -1,8 +1,6 @@
 /// <reference lib="webworker" />
-// Service worker — written by hand so we can inject a custom runtime plugin
-// that transcodes PNG chord sheets into WebP at cache time. Source files on
-// R2 stay PNG; the user's local cache holds the (smaller) WebP rendering, so
-// more sheets fit before hitting browser quotas.
+// Service worker — handles SPA navigation fallback, song-payload caching,
+// chord-image caching, and the notification-click deep-link.
 //
 // Built via vite-plugin-pwa (strategies: "injectManifest"). `self.__WB_MANIFEST`
 // is replaced at build time with the precache list.
@@ -12,11 +10,19 @@ import { registerRoute, NavigationRoute } from "workbox-routing";
 import { CacheFirst, StaleWhileRevalidate } from "workbox-strategies";
 import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
-import type { WorkboxPlugin } from "workbox-core/types";
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
+  __WB_DISABLE_DEV_LOGS?: boolean;
 };
+
+// Silence workbox's per-route debug logging. Without this, every cached
+// fetch prints "[workbox] Updating the 'chord-images' cache with a new
+// Response for ..." — fine for one or two requests, but during a 70k
+// offline bulk-download it floods the console with tens of thousands of
+// lines and tanks DevTools performance. Must be set BEFORE any workbox
+// module is imported elsewhere or it's a no-op.
+self.__WB_DISABLE_DEV_LOGS = true;
 
 self.skipWaiting();
 self.addEventListener("activate", (event) => {
@@ -39,7 +45,7 @@ registerRoute(
   }),
 );
 
-// 4) Images — fetch PNG, transcode to WebP, cache the WebP --------------------
+// 4) Images — cache-first from R2 (or same-origin proxy in prod) -------------
 const IMAGE_BASE = import.meta.env.VITE_IMAGE_BASE as string | undefined;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 let imagePattern: RegExp;
@@ -52,69 +58,18 @@ try {
   imagePattern = /\/images\//;
 }
 
-// Feature-detect: OffscreenCanvas with convertToBlob lands in Chrome 88+,
-// Firefox 110+, Safari 16.4+. Older browsers skip transcoding and just cache
-// the PNG as-is (the URL stays the same; behavior is identical, only the
-// cache footprint differs).
-const canTranscodeToWebP =
-  typeof OffscreenCanvas !== "undefined" &&
-  typeof OffscreenCanvas.prototype.convertToBlob === "function" &&
-  typeof createImageBitmap !== "undefined";
-
-const webpTranscodePlugin: WorkboxPlugin = {
-  async cacheWillUpdate({ response }) {
-    if (!response || !response.ok) return null;
-    const type = response.headers.get("Content-Type") ?? "";
-    // Only transcode raster PNG. WebP/JPEG/SVG/etc. pass through unchanged.
-    if (!type.startsWith("image/png")) return response;
-    if (!canTranscodeToWebP) return response;
-    try {
-      const pngBlob = await response.clone().blob();
-      const bitmap = await createImageBitmap(pngBlob);
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        bitmap.close();
-        return response;
-      }
-      ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
-      const webpBlob = await canvas.convertToBlob({
-        type: "image/webp",
-        // High quality; chord sheets are mostly flat colors so any artifacting
-        // would be obvious. 0.95 is visually identical to PNG in practice.
-        quality: 0.95,
-      });
-      // Some browsers refuse WebP (sad iOS 16.3 etc.) — fall back to PNG.
-      if (!webpBlob || webpBlob.type !== "image/webp") return response;
-      const headers = new Headers(response.headers);
-      headers.set("Content-Type", "image/webp");
-      headers.set("Content-Length", String(webpBlob.size));
-      headers.delete("Content-Encoding");
-      headers.set("X-Transcoded", "webp");
-      return new Response(webpBlob, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
-    } catch (err) {
-      console.warn("[sw] WebP transcode failed; caching PNG", err);
-      return response;
-    }
-  },
-};
-
 registerRoute(
   imagePattern,
   new CacheFirst({
     cacheName: "chord-images",
     plugins: [
       new ExpirationPlugin({
-        maxEntries: 10000,
+        // Headroom over the 70,107-song dataset so the offline-mode bulk
+        // download doesn't evict its own files as it walks past 10k.
+        maxEntries: 80000,
         maxAgeSeconds: 60 * 60 * 24 * 365,
       }),
       new CacheableResponsePlugin({ statuses: [0, 200] }),
-      webpTranscodePlugin,
     ],
   }),
 );

@@ -43,6 +43,32 @@ function randomClientId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// URL shape: `/<room>` or `/<room>/<songId>`. Anything else is treated as no
+// room/song info on the URL.
+const URL_PATH_RE = /^\/(\d{6})(?:\/(\d+))?$/;
+
+function parseUrlPath(
+  pathname: string,
+): { roomCode: string; songId: number | null } | null {
+  const m = pathname.match(URL_PATH_RE);
+  if (!m) return null;
+  return { roomCode: m[1], songId: m[2] ? Number(m[2]) : null };
+}
+
+function urlPathFor(roomCode: string, songId: number | null): string {
+  return songId !== null ? `/${roomCode}/${songId}` : `/${roomCode}`;
+}
+
+// pushState only if the path actually changed — avoids spamming the history
+// stack with duplicate entries when callers eagerly call this on every state
+// change.
+function pushUrl(roomCode: string, songId: number | null) {
+  const next = urlPathFor(roomCode, songId);
+  if (window.location.pathname !== next) {
+    history.pushState(null, "", next);
+  }
+}
+
 // Firebase RTDB drops empty arrays and arrays-with-holes, so playlists read
 // back from the wire may be missing `songIds` entirely or arrive as a sparse
 // object. Normalize to a well-formed array.
@@ -210,6 +236,15 @@ export const useApp = create<State>((set, get) => {
     sync.publishMyPlaylists(clientId, playlists).catch(console.error);
   }
 
+  // Persist + broadcast a new playlists array in one shot. Every mutation
+  // (add/remove/reorder/create/rename/delete) ends with the same three steps,
+  // so we centralize them here.
+  function commitPlaylists(playlists: Playlist[]) {
+    set({ playlists });
+    saveJSON("playlists", playlists);
+    publishOwnPlaylists(playlists);
+  }
+
   return {
   songs: [],
   songIndex: [],
@@ -255,16 +290,16 @@ export const useApp = create<State>((set, get) => {
     // URL shape: /<room>            → just the room
     //            /<room>/<songId>   → room + open this song in fullscreen
     // (anything else falls through to localStorage / random)
-    const urlMatch = window.location.pathname.match(/^\/(\d{6})(?:\/(\d+))?$/);
-    const urlSongId = urlMatch && urlMatch[2] ? Number(urlMatch[2]) : null;
+    const urlParsed = parseUrlPath(window.location.pathname);
+    const urlSongId = urlParsed?.songId ?? null;
     // urlForcedRoom: the user landed on this device via a shared link, so
     // their URL choice MUST beat whatever stale roomCode is sitting in this
     // client's Firestore doc from a previous session. Without this, the
     // first cloud-sync snapshot would call setRoomCode(remote) and bounce
     // the URL back to the old room.
-    const urlForcedRoom = Boolean(urlMatch);
-    if (urlMatch) {
-      roomCode = urlMatch[1];
+    const urlForcedRoom = urlParsed !== null;
+    if (urlParsed) {
+      roomCode = urlParsed.roomCode;
       saveLocal("roomCode", roomCode);
     } else {
       roomCode = loadLocal<string>("roomCode", "");
@@ -275,23 +310,21 @@ export const useApp = create<State>((set, get) => {
     }
     // Normalize URL so the address bar matches state — keep songId when
     // present, otherwise just the room.
-    const initialPath = urlSongId !== null ? `/${roomCode}/${urlSongId}` : `/${roomCode}`;
+    const initialPath = urlPathFor(roomCode, urlSongId);
     if (window.location.pathname !== initialPath) {
       history.replaceState(null, "", initialPath);
     }
     // Back/forward navigation. Path can change in two dimensions (room
     // changes, song open/close), so reconcile both against current state.
     window.addEventListener("popstate", () => {
-      const m = window.location.pathname.match(/^\/(\d{6})(?:\/(\d+))?$/);
-      if (!m) return;
-      const nextRoom = m[1];
-      const nextSongId = m[2] ? Number(m[2]) : null;
-      if (nextRoom !== get().roomCode) get().setRoomCode(nextRoom);
+      const parsed = parseUrlPath(window.location.pathname);
+      if (!parsed) return;
+      if (parsed.roomCode !== get().roomCode) get().setRoomCode(parsed.roomCode);
       const cur = get().viewing;
-      if (nextSongId === null && cur) {
+      if (parsed.songId === null && cur) {
         set({ viewing: null });
-      } else if (nextSongId !== null && (!cur || cur.id !== nextSongId)) {
-        const song = get().byId.get(nextSongId);
+      } else if (parsed.songId !== null && (!cur || cur.id !== parsed.songId)) {
+        const song = get().byId.get(parsed.songId);
         if (song) set({ viewing: song });
       }
     });
@@ -487,11 +520,7 @@ export const useApp = create<State>((set, get) => {
     // the currently-open song (if any) so swapping rooms while in fullscreen
     // doesn't drop the songId from the path. pushState (not replace) lets
     // back/forward walk through prior rooms.
-    const viewing = get().viewing;
-    const nextPath = viewing ? `/${code}/${viewing.id}` : `/${code}`;
-    if (window.location.pathname !== nextPath) {
-      history.pushState(null, "", nextPath);
-    }
+    pushUrl(code, get().viewing?.id ?? null);
     if (pushToCloud) csMod?.pushUpdate({ roomCode: code });
     set({
       roomCode: code,
@@ -522,10 +551,7 @@ export const useApp = create<State>((set, get) => {
     csMod?.pushUpdate({ latest: cur });
     // Reflect the open song in the URL so deep-links / refresh / shared
     // notifications all land back on this exact view.
-    const roomPath = `/${get().roomCode}/${song.id}`;
-    if (window.location.pathname !== roomPath) {
-      history.pushState(null, "", roomPath);
-    }
+    pushUrl(get().roomCode, song.id);
     // broadcast to room — `pickerViewing: true` signals to receivers that
     // the picker is currently in fullscreen, so their auto-open should
     // fire (and stay open until the picker explicitly closes).
@@ -546,10 +572,7 @@ export const useApp = create<State>((set, get) => {
     const prevViewing = get().viewing;
     set({ viewing: null });
     // Strip the songId segment back off the URL when fullscreen closes.
-    const roomPath = `/${get().roomCode}`;
-    if (window.location.pathname !== roomPath) {
-      history.pushState(null, "", roomPath);
-    }
+    pushUrl(get().roomCode, null);
     // Only the room's picker broadcasts a close. Receivers closing locally
     // is a private action — it shouldn't drag the picker (or other
     // receivers) out of fullscreen. We also gate on "I'm closing the song
@@ -587,70 +610,61 @@ export const useApp = create<State>((set, get) => {
     // Each member edits only their OWN playlists. If `playlistId` isn't in
     // our local list it belongs to another member and is read-only here.
     if (!get().playlists.some((p) => p.id === playlistId)) return;
-    const playlists = get().playlists.map((p) =>
-      p.id === playlistId && !p.songIds.includes(id)
-        ? { ...p, songIds: [...p.songIds, id] }
-        : p,
+    commitPlaylists(
+      get().playlists.map((p) =>
+        p.id === playlistId && !p.songIds.includes(id)
+          ? { ...p, songIds: [...p.songIds, id] }
+          : p,
+      ),
     );
-    set({ playlists });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
   },
 
   removeFromPlaylist(playlistId, id) {
     if (!get().playlists.some((p) => p.id === playlistId)) return;
-    const playlists = get().playlists.map((p) =>
-      p.id === playlistId
-        ? { ...p, songIds: p.songIds.filter((x) => x !== id) }
-        : p,
+    commitPlaylists(
+      get().playlists.map((p) =>
+        p.id === playlistId
+          ? { ...p, songIds: p.songIds.filter((x) => x !== id) }
+          : p,
+      ),
     );
-    set({ playlists });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
   },
 
   reorderPlaylist(playlistId, songIds) {
     if (!get().playlists.some((p) => p.id === playlistId)) return;
-    const playlists = get().playlists.map((p) =>
-      p.id === playlistId ? { ...p, songIds: [...songIds] } : p,
+    commitPlaylists(
+      get().playlists.map((p) =>
+        p.id === playlistId ? { ...p, songIds: [...songIds] } : p,
+      ),
     );
-    set({ playlists });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
   },
 
   createPlaylist(name) {
     // Anyone in the room can create a playlist — it becomes theirs.
     const id = Math.random().toString(36).slice(2, 10);
     const p: Playlist = { id, name, songIds: [], createdAt: Date.now() };
-    const playlists = [...get().playlists, p];
-    set({ playlists, activePlaylistId: id });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
+    commitPlaylists([...get().playlists, p]);
+    set({ activePlaylistId: id });
     return id;
   },
 
   renamePlaylist(id, name) {
     if (!get().playlists.some((p) => p.id === id)) return;
-    const playlists = get().playlists.map((p) =>
-      p.id === id ? { ...p, name } : p,
+    commitPlaylists(
+      get().playlists.map((p) => (p.id === id ? { ...p, name } : p)),
     );
-    set({ playlists });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
   },
 
   deletePlaylist(id) {
     if (!get().playlists.some((p) => p.id === id)) return;
-    const playlists = get().playlists.filter((p) => p.id !== id);
     const prev = get();
-    const stillValidActive = prev.activePlaylistId === id ? null : prev.activePlaylistId;
+    const playlists = prev.playlists.filter((p) => p.id !== id);
+    const stillValidActive =
+      prev.activePlaylistId === id ? null : prev.activePlaylistId;
+    commitPlaylists(playlists);
     set({
-      playlists,
       activePlaylistId: resolveActivePlaylistId(playlists, stillValidActive, prev.tab),
     });
-    saveJSON("playlists", playlists);
-    publishOwnPlaylists(playlists);
   },
 
   setActivePlaylist(id) {

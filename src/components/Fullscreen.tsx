@@ -116,6 +116,18 @@ export function Fullscreen() {
         <img
           src={imageUrl(song)}
           alt={song.name}
+          // `crossOrigin="anonymous"` works in both environments:
+          //   - PROD: VITE_IMAGE_BASE=/images → same-origin → attribute is
+          //     a no-op, no CORS check happens, response is "basic", no
+          //     Chrome opaque-padding tax.
+          //   - DEV: VITE_IMAGE_BASE points at the R2 Public Development
+          //     URL which honors the bucket's CORS Policy, so the cross-
+          //     origin fetch returns `Access-Control-Allow-Origin: *`,
+          //     the response is "cors" (not opaque), and again no padding.
+          // The Cloudflare custom-domain R2 URL does NOT return CORS
+          // headers, so don't repoint VITE_IMAGE_BASE there without also
+          // removing this attribute or images will silently fail to load.
+          crossOrigin="anonymous"
           onLoad={() => setLoadedId(song.id)}
           onClick={(e) => e.stopPropagation()}
           draggable={false}

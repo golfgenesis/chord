@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp, useMergedPlaylists } from "../store";
 import type { MergedPlaylist } from "../store";
+import { PlusIcon, TrashIcon } from "./icons";
 
 export function PlaylistPicker() {
   const merged = useMergedPlaylists();
@@ -304,22 +305,6 @@ function CreateSheet({
   );
 }
 
-function PlusIcon({ className = "size-4" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-
 function EditIcon() {
   return (
     <svg
@@ -337,18 +322,3 @@ function EditIcon() {
   );
 }
 
-function TrashIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-    </svg>
-  );
-}

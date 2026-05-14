@@ -18,10 +18,17 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useApp } from "../store";
 import { useVisibleSongs } from "../hooks/useVisibleSongs";
+import { useCachedSongIds } from "../lib/offlineDownload";
 import type { Song } from "../types";
+import { PlusIcon, TrashIcon } from "./icons";
 
 export function SongList() {
   const songs = useVisibleSongs();
+  // Use the FULL song dataset (not the filtered visible list) to compute
+  // cache membership — a song should look cached on every tab regardless
+  // of whether the user has it filtered into view right now.
+  const allSongs = useApp((s) => s.songs);
+  const cachedSongIds = useCachedSongIds(allSongs);
   const tab = useApp((s) => s.tab);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const query = useApp((s) => s.query);
@@ -85,6 +92,7 @@ export function SongList() {
         <SortablePlaylist
           songs={songs}
           playlistId={activePlaylistId}
+          cachedSongIds={cachedSongIds}
           scrollRef={sortableScrollRef}
           onScroll={(e) => setShowScrollTop(e.currentTarget.scrollTop > 0)}
         />
@@ -103,7 +111,9 @@ export function SongList() {
         // vertical scrolling — without it the nested overflow container can
         // become unresponsive to drag-pan on iPhone/iPad.
         style={{ touchAction: "pan-y" }}
-        itemContent={(_i, song) => <Row song={song} />}
+        itemContent={(_i, song) => (
+          <Row song={song} isCached={cachedSongIds.has(song.id)} />
+        )}
         computeItemKey={(_i, song) => song.id}
         increaseViewportBy={400}
         atTopStateChange={(atTop) => setShowScrollTop(!atTop)}
@@ -116,11 +126,13 @@ export function SongList() {
 function SortablePlaylist({
   songs,
   playlistId,
+  cachedSongIds,
   scrollRef,
   onScroll,
 }: {
   songs: Song[];
   playlistId: string;
+  cachedSongIds: Set<number>;
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: React.UIEventHandler<HTMLDivElement>;
 }) {
@@ -156,7 +168,11 @@ function SortablePlaylist({
           style={{ paddingBottom: "var(--safe-bottom)" }}
         >
           {songs.map((song) => (
-            <SortableRow key={song.id} song={song} />
+            <SortableRow
+              key={song.id}
+              song={song}
+              isCached={cachedSongIds.has(song.id)}
+            />
           ))}
         </div>
       </SortableContext>
@@ -164,7 +180,7 @@ function SortablePlaylist({
   );
 }
 
-function SortableRow({ song }: { song: Song }) {
+function SortableRow({ song, isCached }: { song: Song; isCached: boolean }) {
   const {
     attributes,
     listeners,
@@ -183,6 +199,7 @@ function SortableRow({ song }: { song: Song }) {
     <div ref={setNodeRef} style={style}>
       <Row
         song={song}
+        isCached={isCached}
         dragHandle={
           <button
             {...attributes}
@@ -203,9 +220,11 @@ function SortableRow({ song }: { song: Song }) {
 
 function Row({
   song,
+  isCached,
   dragHandle,
 }: {
   song: Song;
+  isCached: boolean;
   dragHandle?: React.ReactNode;
 }) {
   const open = useApp((s) => s.open);
@@ -250,6 +269,21 @@ function Row({
           <span className="truncate text-[15px] font-medium leading-[1.5] tracking-tight text-ink sm:text-[16px]">
             {song.name}
           </span>
+          {/* A small green dot signals "cached, plays offline". Songs
+              streamed live from R2 on demand carry no marker — absence
+              is the cleanest way to keep the 70k-row list visually
+              quiet. The outer ring is a soft halo so the dot reads as
+              a status indicator, not a stray pixel. */}
+          {isCached && (
+            <span
+              className="relative ml-0.5 grid size-2 shrink-0 place-items-center"
+              title="ดาวน์โหลดแล้ว · ใช้ดูออฟไลน์ได้"
+              aria-label="Offline available"
+            >
+              <span className="absolute size-3 rounded-full bg-emerald-500/30 blur-[2px]" />
+              <span className="relative size-2 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.7)]" />
+            </span>
+          )}
           {isLatest && (
             <span className="shrink-0 rounded-full bg-brand-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-brand">
               ล่าสุด
@@ -449,36 +483,6 @@ function StarIcon({ filled }: { filled: boolean }) {
       }`}
     >
       <path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-    </svg>
-  );
-}
-function PlusIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-function TrashIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-    >
-      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
     </svg>
   );
 }

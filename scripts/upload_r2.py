@@ -1,58 +1,40 @@
-"""
-Upload F:\\chord\\images to Cloudflare R2 bucket `chord-images`.
+r"""
+Upload chord-sheet images to Cloudflare R2.
 
 Resumable + incremental — lists what's already in R2 first, only uploads new files.
 Concurrent uploads (16 threads by default). Sets long cache headers.
 
+R2 credentials come from `<project_root>/.env.local`:
+
+    R2_ACCESS_KEY=...
+    R2_SECRET_KEY=...
+
 Usage (in PowerShell):
 
-    pip install boto3 tqdm
+    pip install boto3
 
-    $env:R2_ACCESS_KEY = "your-access-key"
-    $env:R2_SECRET_KEY = "your-secret-key"
-    python F:\\chord\\scripts\\upload_r2.py
+    python F:\chord\scripts\upload_r2.py
+    # Optional: override source directory
+    python F:\chord\scripts\upload_r2.py F:\some\other\dir
 """
 
-import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-try:
-    import boto3
-    from botocore.config import Config
-except ImportError:
-    print("ERROR: boto3 not installed. Run: pip install boto3")
-    sys.exit(1)
+# Make sibling helpers importable when this script is run from any cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _r2 import BUCKET, make_client  # noqa: E402
 
 # ---- Config -----------------------------------------------------------------
-ENDPOINT = "https://10eeeb9ff10ab208fccf3479cdde6c19.r2.cloudflarestorage.com"
-BUCKET = "chord-images"
-LOCAL_DIR = Path(r"F:\chord\images")
+DEFAULT_DIR = Path(r"F:\chord\images")
+LOCAL_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_DIR
 WORKERS = 16
 CACHE_CONTROL = "public, max-age=31536000, immutable"
 
-ACCESS_KEY = os.environ.get("R2_ACCESS_KEY", "")
-SECRET_KEY = os.environ.get("R2_SECRET_KEY", "")
-if not ACCESS_KEY or not SECRET_KEY:
-    print("ERROR: Set R2_ACCESS_KEY and R2_SECRET_KEY env vars first.")
-    print('Example: $env:R2_ACCESS_KEY = "..."; $env:R2_SECRET_KEY = "..."')
-    sys.exit(1)
-
 # ---- Client -----------------------------------------------------------------
-s3 = boto3.client(
-    "s3",
-    endpoint_url=ENDPOINT,
-    aws_access_key_id=ACCESS_KEY,
-    aws_secret_access_key=SECRET_KEY,
-    region_name="auto",
-    config=Config(
-        max_pool_connections=WORKERS * 2,
-        retries={"max_attempts": 5, "mode": "adaptive"},
-        s3={"addressing_style": "path"},
-    ),
-)
+s3 = make_client(workers=WORKERS)
 
 # ---- List existing files in R2 ---------------------------------------------
 print(f"Listing existing objects in r2://{BUCKET} ...")
@@ -69,8 +51,21 @@ if not LOCAL_DIR.is_dir():
     print(f"ERROR: {LOCAL_DIR} not found")
     sys.exit(1)
 
-local_files = [p for p in LOCAL_DIR.iterdir() if p.is_file()]
-print(f"Local: {len(local_files):,} files in {LOCAL_DIR}")
+# Only upload .webp — the app's `imageUrl()` returns ".webp" paths and the
+# Pages Function proxies them straight from R2. Filtering at upload time
+# stops two classes of mistake from contaminating the bucket:
+#   - leftover .png from before the WebP migration
+#   - HTML error pages that download.py saved as .png because the upstream
+#     server returned a 200 with an error body (8 of the 70k records on
+#     the first scrape had this — they look like 25 KB PNGs but the bytes
+#     start with `<!DOCT`)
+SERVED_EXTS = {".webp"}
+all_files = [p for p in LOCAL_DIR.iterdir() if p.is_file()]
+local_files = [p for p in all_files if p.suffix.lower() in SERVED_EXTS]
+skipped_other = len(all_files) - len(local_files)
+print(f"Local: {len(local_files):,} WebP files in {LOCAL_DIR}")
+if skipped_other:
+    print(f"  (skipped {skipped_other:,} non-WebP file(s))")
 
 to_upload = [p for p in local_files if p.name not in existing]
 already = len(local_files) - len(to_upload)
