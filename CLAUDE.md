@@ -11,6 +11,13 @@ npm run build:full   # also rebuilds public/songs.bin from data/results.json
 npm run lint         # eslint .
 npm run preview      # serve dist/ for smoke testing
 npm run data         # rebuild public/songs.bin only
+
+# Data pipeline (py scripts under scripts/)
+npm run sync         # probe source → scrape → download → convert → upload → verify → build
+npm run sync:push    # same as above, then git add/commit/push public/songs.bin
+npm run sync:dry     # print every step's command without running (skips probe)
+npm run check        # cross-check results.json ↔ images/ ↔ R2 bucket (pretty console)
+npm run check:clean  # delete orphan WebP files locally + on R2 (asks confirmation)
 ```
 
 No test suite exists; verification is type-check + lint + manual browser testing.
@@ -67,7 +74,7 @@ Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `genera
 
 Permission is requested on the first `pointerdown`/`keydown` after mount (browsers gate `Notification.requestPermission()` behind a user gesture; calling on mount silently no-ops). The notification uses `registration.showNotification` (with a fallback to `new Notification`) and embeds `data.url = /{roomCode}/{songId}` so the SW's `notificationclick` handler can deep-link straight to the song.
 
-The hook has **no "first snapshot" guard** — guests joining mid-rehearsal should immediately auto-open whatever the band is currently on. Dedup happens via `lastSongId.current` + `lastPickerViewing.current` only.
+The hook has a **page-load baseline guard**: songs whose `pickedAt < mountedAt` (i.e. the room already had that song when this tab loaded) update bookkeeping but DON'T auto-open. A fresh page load should land on the home/list view, not get yanked into fullscreen for whatever the band was on before this tab joined. Only picks made *after* mount auto-open. Deep-linking via `/{room}/{songId}` URLs is handled in `store.init()` separately and is unaffected by this guard. Dedup of subscription replays still happens via `lastSongId.current` + `lastPickerViewing.current`.
 
 ## iOS / iPad quirks baked into the code
 
@@ -90,8 +97,8 @@ The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/co
 
 - `scripts/_env.py` — auto-loads `.env.local` into `os.environ`. Imported transitively by every Python script that needs credentials.
 - `scripts/_r2.py` — shared boto3 R2 client factory + `BUCKET` constant. Reads `R2_ACCESS_KEY` / `R2_SECRET_KEY` / `R2_ENDPOINT` / `R2_BUCKET` from env (which `_env.py` populated from `.env.local`).
-- **`scripts/sync.py`** — Python one-stop pipeline. Auto-detects the next scrape start id from `results.json`; orchestrates scrape → download → sync-names → convert → upload → verify → build → (optional) git push. Run as `py scripts/sync.py --end <last_id> --push`. Each underlying step still runs as a subprocess of its existing script, so they stay independently testable.
-- **`scripts/check_sync.py`** — standalone verifier: cross-checks `data/results.json` vs local `images/` vs R2 bucket. Reports missing-locally / missing-on-R2 / orphans, and can delete orphans with `--delete-orphans`. Exit 0 if everything matches, 1 otherwise (useful in pre-push hooks).
+- **`scripts/sync.py`** — Python one-stop pipeline. Auto-detects the next scrape start id from `results.json` AND auto-probes chordtabs.in.th forward until 10 consecutive misses (so `--end` is optional). Orchestrates scrape → download → sync-names → convert → upload → verify → build → (optional) git push. Run via `npm run sync` / `npm run sync:push`. Each underlying step still runs as a subprocess of its existing script, so they stay independently testable. Safety ceiling of 1000 ids per probe — re-run if the source has more than that pending.
+- **`scripts/check_sync.py`** — standalone verifier: cross-checks `data/results.json` vs local `images/` vs R2 bucket. Pretty box-drawing console output; `--json` for machines. Reports missing-locally / missing-on-R2 / orphans, and can delete orphans with `--delete-orphans`. Exit 0 if everything matches, 1 otherwise (useful in pre-push hooks). Run via `npm run check`.
 - `scripts/pipeline.ps1` — older PowerShell wrapper. Only runs upload + build + push (no scrape/download/convert) and uses `py` autodetect. **`sync.py` supersedes it for the full pipeline**; `pipeline.ps1` is kept for back-compat with anyone who has scripts wired into it.
 - **Do NOT add `publish.ps1` or `check_missing.py` back** — both were removed because they built/checked the legacy `songs.json` (no longer exists), and the `file` field they referenced was never written by the current `build-data.mjs`.
 - Sequencing when adding new songs (manually, if not using `sync.py`): `scrape.py` → `download.py` (PNG) → `sync_names.py` (still PNG-stage) → `convert_to_webp.py` (PNG→WebP, deletes source) → `upload_r2.py images/` → `check_sync.py` → `node scripts/build-data.mjs`. Running `sync_names.py` after conversion will report 70k "missing" files because it only knows about `.png`.

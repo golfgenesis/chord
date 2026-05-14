@@ -153,6 +153,35 @@ export async function downloadAllSongs(
   return { done, total, failed };
 }
 
+// ─── Cache change pub/sub ────────────────────────────────────────────────
+//
+// The chord-image Cache Storage has no native change event. Anything that
+// mutates it (a Fullscreen image load that just got SW-cached, an explicit
+// clearImageCache, a one-off fetch) has to call notifyCacheChanged() so
+// every subscriber re-scans cache.keys() and updates its derived state.
+// Without this, the green "offline-available" dot in SongList stays stale
+// after the user views a song, and the "downloaded N เพลง" tally in
+// OfflineSheet doesn't fall to 0 after Clear Cache.
+
+let cacheVersion = 0;
+const cacheChangeListeners = new Set<() => void>();
+
+export function subscribeCacheChange(listener: () => void): () => void {
+  cacheChangeListeners.add(listener);
+  return () => {
+    cacheChangeListeners.delete(listener);
+  };
+}
+
+export function getCacheVersion(): number {
+  return cacheVersion;
+}
+
+export function notifyCacheChanged(): void {
+  cacheVersion++;
+  for (const l of cacheChangeListeners) l();
+}
+
 // ─── Singleton download manager ──────────────────────────────────────────
 //
 // The OfflineSheet modal mounts and unmounts as the user opens/closes it,
@@ -245,6 +274,7 @@ export async function clearImageCache(): Promise<boolean> {
   try {
     const ok = await caches.delete(CACHE_NAME);
     setManagerState({ progress: null });
+    notifyCacheChanged();
     return ok;
   } catch {
     return false;
@@ -262,6 +292,10 @@ export async function clearImageCache(): Promise<boolean> {
 export function useCachedSongIds(songs: Song[]): Set<number> {
   const [cached, setCached] = useState<Set<number>>(() => new Set());
   const dl = useSyncExternalStore(subscribeDownload, getDownloadState);
+  // Re-scan whenever something explicitly tells us the cache changed
+  // (Fullscreen image load, clearImageCache, etc.) — Cache Storage has
+  // no native change event so notifyCacheChanged() is the trigger.
+  const cv = useSyncExternalStore(subscribeCacheChange, getCacheVersion);
 
   useEffect(() => {
     let cancelled = false;
@@ -286,7 +320,7 @@ export function useCachedSongIds(songs: Song[]): Set<number> {
     return () => {
       cancelled = true;
     };
-  }, [songs, dl.isDownloading]);
+  }, [songs, dl.isDownloading, cv]);
 
   return cached;
 }

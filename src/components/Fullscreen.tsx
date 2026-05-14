@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../store";
 import { imageUrl } from "../lib/imageUrl";
+import { notifyCacheChanged } from "../lib/offlineDownload";
 
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
@@ -128,7 +129,14 @@ export function Fullscreen() {
           // headers, so don't repoint VITE_IMAGE_BASE there without also
           // removing this attribute or images will silently fail to load.
           crossOrigin="anonymous"
-          onLoad={() => setLoadedId(song.id)}
+          onLoad={() => {
+            setLoadedId(song.id);
+            // The SW's CacheFirst put() races with onLoad — the response is
+            // dispatched to the <img> before cache.put resolves. Wait a beat
+            // so getCachedUrlSet() reflects the new entry, then bump the
+            // version so SongList's green dot lights up.
+            setTimeout(notifyCacheChanged, 300);
+          }}
           onClick={(e) => e.stopPropagation()}
           draggable={false}
           decoding="async"

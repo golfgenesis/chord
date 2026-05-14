@@ -8,10 +8,12 @@ import {
   clearImageCache,
   formatBytes,
   getCachedUrlSet,
+  getCacheVersion,
   getDownloadState,
   getStorageInfo,
   requestPersistentStorage,
   startBulkDownload,
+  subscribeCacheChange,
   subscribeDownload,
   absoluteImageUrl,
   type StorageInfo,
@@ -110,6 +112,10 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
     subscribeDownload,
     getDownloadState,
   );
+  // Re-scan cache.keys() whenever something mutates Cache Storage (e.g.
+  // clearImageCache) so the "ดาวน์โหลดแล้ว N เพลง" tally drops to 0
+  // immediately instead of waiting for the next reopen.
+  const cv = useSyncExternalStore(subscribeCacheChange, getCacheVersion);
   const [storage, setStorage] = useState<StorageInfo>({
     quota: null,
     usage: null,
@@ -148,7 +154,7 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
       cancelled = true;
       if (id !== null) window.clearInterval(id);
     };
-  }, [downloading, songs]);
+  }, [downloading, songs, cv]);
 
   async function start() {
     // Ask for persistence under a real user gesture (this onClick) so the
