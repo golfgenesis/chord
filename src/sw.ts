@@ -62,6 +62,17 @@ registerRoute(
   imagePattern,
   new CacheFirst({
     cacheName: "chord-images",
+    // The R2 Custom Domain's Transform Rule sets `Vary: Origin` on every
+    // response. Workbox's default cache.match() then refuses to serve a
+    // cached entry unless the stored Request's Origin header matches the
+    // new request's — but `cache.put(url, res)` in offlineDownload.ts
+    // stores a Request constructed from a string URL, which has no
+    // Origin header, while the live `<img crossOrigin="anonymous">`
+    // request DOES have one. Result: cache.keys() finds the entry (so
+    // the green dot lights up) but cache.match() comes up empty and the
+    // offline image fails. ignoreVary: true skips that check — safe for
+    // us because we always serve the same body regardless of Origin.
+    matchOptions: { ignoreVary: true },
     plugins: [
       new ExpirationPlugin({
         // Headroom over the 70,107-song dataset so the offline-mode bulk
