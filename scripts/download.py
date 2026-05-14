@@ -29,9 +29,14 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import requests
+
+# chordtabs.in.th returns relative `src` attrs like `/img/nm/c0001234.png`.
+# Resolve against this base so the download requests are valid URLs.
+SOURCE_BASE_URL = "https://chordtabs.in.th/"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -107,12 +112,15 @@ def make_session():
     return s
 
 
-def download_one(session, record, fname, out_dir):
-    out_path = os.path.join(out_dir, fname)
-    if os.path.exists(out_path):
-        return ("skip", record["id"], out_path)
+def download_one(session, record, fname, out_dir, existing_stems):
+    # Skip if any file with this stem already exists — handles both the
+    # PNG (mid-pipeline) and WebP (post-convert) cases without re-downloading.
+    stem = os.path.splitext(fname)[0]
+    if stem in existing_stems:
+        return ("skip", record["id"], stem)
 
-    url = record["src"]
+    out_path = os.path.join(out_dir, fname)
+    url = urljoin(SOURCE_BASE_URL, record["src"])
     tmp_path = out_path + ".part"
     last_err = None
     for attempt in range(RETRIES + 1):
@@ -153,10 +161,23 @@ def run(test_n=None, workers=WORKERS):
             print(f"             -> {os.path.join(OUT_DIR, fname)}")
         print()
 
+    # Snapshot every existing stem in OUT_DIR once — used to skip records
+    # we already have on disk (either as .png or .webp). One listdir is
+    # vastly cheaper than 70k filesystem stat() calls inside workers.
+    existing_stems = {p.stem for p in Path(OUT_DIR).iterdir() if p.is_file()}
+    pending = [(r, fname) for r, fname in targets
+               if os.path.splitext(fname)[0] not in existing_stems]
+
     print(f"Output dir: {OUT_DIR}")
-    print(f"Total to process: {len(targets):,}")
+    print(f"Already on disk: {len(existing_stems):,}")
+    print(f"Total in results.json: {len(targets):,}")
+    print(f"To download: {len(pending):,}")
     print(f"Workers: {workers}")
     print()
+
+    if not pending:
+        print("Nothing to download.")
+        return
 
     session = make_session()
     counts = {"ok": 0, "skip": 0, "fail": 0, "404": 0}
@@ -165,19 +186,19 @@ def run(test_n=None, workers=WORKERS):
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(download_one, session, r, fname, OUT_DIR): (r, fname)
-                    for r, fname in targets}
+            futs = {ex.submit(download_one, session, r, fname, OUT_DIR, existing_stems): (r, fname)
+                    for r, fname in pending}
             for fut in as_completed(futs):
                 r, fname = futs[fut]
                 status, ident, info = fut.result()
                 counts[status] = counts.get(status, 0) + 1
                 done += 1
-                if test_n is not None or done % 200 == 0 or done == len(targets):
+                if test_n is not None or done % 200 == 0 or done == len(pending):
                     elapsed = time.time() - started
                     rate = done / elapsed if elapsed else 0
-                    eta = (len(targets) - done) / rate if rate else 0
+                    eta = (len(pending) - done) / rate if rate else 0
                     print(
-                        f"[{done:,}/{len(targets):,}] "
+                        f"[{done:,}/{len(pending):,}] "
                         f"ok={counts['ok']} skip={counts['skip']} "
                         f"fail={counts.get('fail',0)} 404={counts.get('404',0)} "
                         f"rate={rate:.1f}/s eta={eta/60:.1f}min",

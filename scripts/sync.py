@@ -64,7 +64,7 @@ PROBE_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-PROBE_MISS_THRESHOLD = 10   # stop after N consecutive misses
+PROBE_MISS_THRESHOLD = 100   # stop after N consecutive misses
 PROBE_MAX_LOOKAHEAD = 1000  # absolute safety ceiling per run
 
 
@@ -100,6 +100,11 @@ def probe_source_end(start: int) -> int:
     import requests
     from bs4 import BeautifulSoup
 
+    # Reuse scrape.py's predicate for "is this a real chord image" so the
+    # probe doesn't burn the safety ceiling on placeholder pages.
+    sys.path.insert(0, str(SCRIPTS))
+    from scrape import looks_like_real_image  # noqa: E402
+
     session = requests.Session()
     session.headers.update({"User-Agent": PROBE_USER_AGENT})
 
@@ -119,7 +124,7 @@ def probe_source_end(start: int) -> int:
                 soup = BeautifulSoup(r.text, "lxml")
                 div = soup.find(id="divlyric")
                 img = div.find("img") if div else None
-                has_image = bool(img and img.get("src"))
+                has_image = bool(img and looks_like_real_image(img.get("src")))
         except requests.RequestException as e:
             print(f"  !  {page_id:>6}  network error: {e}", flush=True)
 

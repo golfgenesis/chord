@@ -24,8 +24,20 @@ import json
 import os
 import re
 import shutil
+import sys
 from collections import Counter
 from urllib.parse import urlparse
+
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+# images/ holds both .png (pre-convert, just downloaded) and .webp (already
+# converted by a previous run). The script's job is name-vs-alt consistency,
+# which is extension-agnostic — so we match on stem.
+IMAGE_EXTS = {".png", ".webp", ".jpg", ".jpeg", ".gif"}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -59,8 +71,15 @@ def main():
     cleaned = [clean_alt(r["alt"]) for r in records]
     counts = Counter(name.lower() for name in cleaned)
 
-    # Snapshot disk contents (case-insensitive index -> actual filename)
-    actual_files = {f.lower(): f for f in os.listdir(OUT_DIR)}
+    # Snapshot disk contents indexed by lowercase stem (extension-agnostic)
+    # so a .webp on disk satisfies a record whose src is .png. Each entry
+    # is (lowercase actual filename, actual case filename) so we can detect
+    # case-only mismatches without dragging extension into the comparison.
+    actual_by_stem: dict[str, str] = {}
+    for f in os.listdir(OUT_DIR):
+        stem, ext = os.path.splitext(f)
+        if ext.lower() in IMAGE_EXTS:
+            actual_by_stem[stem.lower()] = f
 
     alt_updates = []        # (record, old_alt, new_alt)
     file_renames = []       # (record, current_path, target_name)
@@ -84,15 +103,19 @@ def main():
             if r["alt"] != desired_alt:
                 alt_updates.append((r, r["alt"], desired_alt))
         else:
-            # Filename should be exactly {cleaned}.png. Check disk.
-            target_lower = fname.lower()
-            if target_lower in actual_files:
-                actual = actual_files[target_lower]
-                if actual != fname:
-                    # Same case-insensitive name but different case — rename for consistency.
-                    file_renames.append((r, actual, fname))
-            else:
+            # Filename stem should be exactly `name` (any image extension).
+            expected_stem = name
+            actual_fname = actual_by_stem.get(expected_stem.lower())
+            if actual_fname is None:
                 missing.append((r, fname))
+            else:
+                actual_stem = os.path.splitext(actual_fname)[0]
+                if actual_stem != expected_stem:
+                    # Case-only mismatch — rename to the expected casing
+                    # while preserving the on-disk extension.
+                    actual_ext = os.path.splitext(actual_fname)[1]
+                    target_fname = expected_stem + actual_ext
+                    file_renames.append((r, actual_fname, target_fname))
 
     print(f"Records total:              {len(records):,}")
     print(f"Alt updates (dups):         {len(alt_updates):,}")

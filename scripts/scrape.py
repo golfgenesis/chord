@@ -30,6 +30,18 @@ WORKERS = 32            # concurrent requests
 REQUEST_TIMEOUT = 20    # seconds
 RETRIES = 2             # per id (in addition to the first attempt)
 
+# chordtabs reserves id slots that don't yet have real chord images —
+# those pages still render <div id="divlyric"><img src="/img/nm/" alt="คอร์ด">.
+# A real chord image has a filename component (e.g. /img/nm/c0001234.png).
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def looks_like_real_image(src: str | None) -> bool:
+    if not src:
+        return False
+    leaf = src.rstrip("/").rsplit("/", 1)[-1].lower()
+    return leaf.endswith(IMAGE_EXTS) and leaf != ""
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -92,9 +104,14 @@ def fetch_one(session: requests.Session, page_id: int):
             img = div.find("img")
             if img is None:
                 return {"id": page_id, "src": None, "alt": None, "status": "no_img"}
+            src = img.get("src")
+            # Placeholder pages have src like "/img/nm/" with no filename —
+            # treat the same as "no img" so finalize_json drops them.
+            if not looks_like_real_image(src):
+                return {"id": page_id, "src": None, "alt": None, "status": "placeholder"}
             return {
                 "id": page_id,
-                "src": img.get("src"),
+                "src": src,
                 "alt": img.get("alt"),
             }
         except requests.RequestException as e:
@@ -184,8 +201,12 @@ def finalize_json():
                 by_id[int(obj["id"])] = obj
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
-    # Keep only successful (src not null) in the final array; tweak if you want all rows.
-    items = [by_id[k] for k in sorted(by_id) if by_id[k].get("src")]
+    # Keep only successful rows — drop nulls AND placeholder srcs like
+    # /img/nm/ that chordtabs returns for reserved-but-empty ids.
+    items = [
+        by_id[k] for k in sorted(by_id)
+        if looks_like_real_image(by_id[k].get("src"))
+    ]
     with open(FINAL_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
     print(f"Wrote {len(items):,} records to {FINAL_JSON_PATH}")
