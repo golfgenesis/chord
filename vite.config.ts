@@ -99,4 +99,31 @@ export default defineConfig({
     host: true,
     port: 5173,
   },
+  // Pre-declare the heavy deps so Vite's dep-optimizer doesn't have to scan
+  // the source tree to discover them. Without this, the first request to /
+  // blocks ~10-15s on a cold cache while firebase + dnd-kit + virtuoso get
+  // bundled into node_modules/.vite/deps.
+  optimizeDeps: {
+    include: [
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "zustand",
+      "idb-keyval",
+      "react-virtuoso",
+      "@dnd-kit/core",
+      "@dnd-kit/sortable",
+      "@dnd-kit/utilities",
+      "firebase/app",
+      "firebase/database",
+      "firebase/firestore",
+      // src/sw.ts pulls these in; declaring them avoids a second "new
+      // dependencies optimized → reloading" pass after the SW first loads.
+      "workbox-precaching",
+      "workbox-routing",
+      "workbox-strategies",
+      "workbox-expiration",
+      "workbox-cacheable-response",
+    ],
+  },
 });

@@ -541,6 +541,10 @@ export const useApp = create<State>((set, get) => {
 
   open(song, broadcast = true) {
     set({ viewing: song });
+    // Clear the search input on user-initiated opens so closing fullscreen
+    // returns to a fresh list. Auto-open from a remote pick keeps the
+    // local search context intact.
+    if (broadcast && get().query) set({ query: "" });
     // push to "latest" (dedup, newest first, FIFO max 30 so the per-user
     // Firestore doc stays bounded)
     const cur = get().latest.filter((id) => id !== song.id);

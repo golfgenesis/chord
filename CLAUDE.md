@@ -89,7 +89,15 @@ These are deliberate workarounds, not cargo-cult — please don't remove without
 
 `public/_redirects` (`/* /index.html 200`) handles SPA fallback for Cloudflare Pages / Netlify; GitHub Pages would need a different trick.
 
-Images: production serves them through [functions/images/[[path]].ts](functions/images/[[path]].ts) (a Cloudflare Pages Function bound to the R2 bucket via the `IMAGES` variable) at the same origin as the app. **Do not set `VITE_IMAGE_BASE` in the Pages dashboard** — it'd point the image fetches cross-origin and re-introduce Chrome's opaque-response padding tax. `src/lib/imageUrl.ts` defaults to `/images/`, which is what the function handles. Dev can optionally set `VITE_IMAGE_BASE` to an R2 Public Development URL to skip the local `imagesMiddleware`.
+Images: served from an **R2 Custom Domain** (e.g. `https://img.yourdomain.com`) bound directly to the `chord-images` bucket. Set `VITE_IMAGE_BASE=https://img.yourdomain.com` in the Pages dashboard (Settings → Environment variables → Production) AND in local `.env.local` so dev and prod fetch identical URLs.
+
+CORS headers are added on the way out via a **Response Header Transform Rule** (Free plan, no Workers quota cost):
+- Filter: `(http.host eq "img.yourdomain.com")`
+- Set static headers: `Access-Control-Allow-Origin: *`, `Access-Control-Expose-Headers: ETag, Content-Length, Content-Type`, `Cross-Origin-Resource-Policy: cross-origin`, `Vary: Origin`
+
+No OPTIONS handling needed because `<img>` and `fetch()` here issue simple GETs (no preflight). With ACAO + `crossOrigin="anonymous"` on `<img>`, responses are "cors" (not opaque) and avoid Chrome's 7 MB-per-entry padding tax. Without these headers, `cache.put()` in [src/lib/offlineDownload.ts](src/lib/offlineDownload.ts) silently drops entries on Chrome and the offline cache stays empty.
+
+Dev: set `VITE_IMAGE_BASE` in `.env.local` to the same custom domain prod uses, so dev and prod are byte-identical paths.
 
 The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/convert_to_webp.py` converts in place and deletes the source PNG. `src/sw.ts` no longer transcodes at runtime (the encode step was the dominant bottleneck of the 70k offline bulk download).
 

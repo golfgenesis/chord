@@ -43,10 +43,27 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# Make sibling helpers importable when this script is run from any cwd, then
+# pull CWEBP (and anything else) out of .env.local before find_cwebp() runs.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import load_env  # noqa: E402
+load_env()
+
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None  # type: ignore[assignment]
+
+
+# Common Windows install locations for libwebp — checked after $env:CWEBP
+# and PATH, so a user who unzipped libwebp to any of these doesn't need to
+# touch their environment at all.
+CWEBP_FALLBACK_PATHS = (
+    r"C:\tools\libwebp\bin\cwebp.exe",
+    r"C:\Program Files\libwebp\bin\cwebp.exe",
+    r"C:\libwebp\bin\cwebp.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\libwebp\bin\cwebp.exe"),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,7 +101,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def find_cwebp() -> str:
-    """Locate the cwebp binary — env var override, PATH lookup, then bail."""
+    """Locate the cwebp binary — env var override, PATH lookup, common install
+    paths, then bail."""
     env = os.environ.get("CWEBP")
     if env:
         if Path(env).exists():
@@ -93,10 +111,13 @@ def find_cwebp() -> str:
     found = shutil.which("cwebp")
     if found:
         return found
+    for candidate in CWEBP_FALLBACK_PATHS:
+        if Path(candidate).exists():
+            return candidate
     sys.exit(
-        "ERROR: cwebp not found on PATH.\n"
+        "ERROR: cwebp not found on PATH or in any common install location.\n"
         "  Install: https://developers.google.com/speed/webp/download\n"
-        "  Or set the CWEBP env var to the full path to cwebp.exe."
+        "  Or set CWEBP in .env.local to the full path to cwebp.exe."
     )
 
 

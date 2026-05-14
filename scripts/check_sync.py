@@ -5,12 +5,14 @@ Verify the chord-image dataset is fully in sync across three places:
   2. F:\chord\images\           (local WebP files)
   3. R2 bucket `chord-images`   (what users actually fetch)
 
-Reports four kinds of mismatch:
+Reports six kinds of mismatch:
 
   * Missing locally  → convert_to_webp.py never ran for these records
   * Missing on R2    → upload_r2.py needs to run for these records
   * Orphan local     → leftover WebP files no record references (safe to delete)
   * Orphan on R2     → leftover R2 objects no record references (safe to delete)
+  * Stray local      → non-WebP files in images/ (failed convert leftover etc.)
+  * Stray on R2      → non-WebP objects in the bucket (shouldn't exist)
 
 USAGE
 
@@ -83,22 +85,31 @@ def expected_webp_filenames() -> set[str]:
     return out
 
 
-def list_local_webp() -> set[str]:
+def list_local() -> tuple[set[str], set[str]]:
+    """Return (webp_set, stray_set). `stray` is every other file — leftover
+    .png from a failed convert, .DS_Store, anything that doesn't belong in
+    a pure-WebP image set. The pipeline serves WebP only so strays are
+    always a sync error, never legitimate."""
     if not IMAGES_DIR.is_dir():
-        return set()
-    return {
-        p.name for p in IMAGES_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() == ".webp"
-    }
+        return set(), set()
+    webp, stray = set(), set()
+    for p in IMAGES_DIR.iterdir():
+        if not p.is_file():
+            continue
+        (webp if p.suffix.lower() == ".webp" else stray).add(p.name)
+    return webp, stray
 
 
-def list_r2_webp(s3) -> set[str]:
-    keys = set()
+def list_r2(s3) -> tuple[set[str], set[str]]:
+    """Same shape as list_local but for the R2 bucket. upload_r2.py filters
+    to .webp at upload time so strays here usually mean someone uploaded
+    by hand or migrated to .webp without cleaning the old .png keys."""
+    webp, stray = set(), set()
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
         for o in page.get("Contents", []) or []:
-            if o["Key"].lower().endswith(".webp"):
-                keys.add(o["Key"])
-    return keys
+            key = o["Key"]
+            (webp if key.lower().endswith(".webp") else stray).add(key)
+    return webp, stray
 
 
 BOX_W = 62
@@ -191,9 +202,9 @@ def main() -> None:
         sys.exit(f"ERROR: {RESULTS_JSON} not found")
 
     expected = expected_webp_filenames()
-    local = list_local_webp()
+    local, stray_local = list_local()
     s3 = make_client()
-    r2 = list_r2_webp(s3)
+    r2, stray_r2 = list_r2(s3)
 
     missing_local = expected - local
     missing_r2 = expected - r2
@@ -204,16 +215,23 @@ def main() -> None:
         "expected": len(expected),
         "local": len(local),
         "r2": len(r2),
+        "stray_local_count": len(stray_local),
+        "stray_r2_count": len(stray_r2),
         "missing_local": sorted(missing_local),
         "missing_r2": sorted(missing_r2),
         "orphan_local": sorted(orphan_local),
         "orphan_r2": sorted(orphan_r2),
+        "stray_local": sorted(stray_local),
+        "stray_r2": sorted(stray_r2),
     }
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        all_good = not (missing_local or missing_r2 or orphan_local or orphan_r2)
+        all_good = not (
+            missing_local or missing_r2 or orphan_local or orphan_r2
+            or stray_local or stray_r2
+        )
 
         print_box("Sync check")
         print()
@@ -227,11 +245,15 @@ def main() -> None:
             else f"⚠ {len(local) - len(expected):,} extra"
         )
         print_row("images/*.webp", f"{len(local):,} files", local_status)
+        if stray_local:
+            print_row("images/ (non-webp)", f"{len(stray_local):,} files", "✗ wrong extension")
         r2_status = "✓ matches data" if len(r2) == len(expected) and not missing_r2 else (
             f"✗ short by {len(expected) - len(r2):,}" if len(r2) < len(expected)
             else f"⚠ {len(r2) - len(expected):,} extra"
         )
         print_row("R2 chord-images", f"{len(r2):,} objects", r2_status)
+        if stray_r2:
+            print_row("R2 (non-webp)", f"{len(stray_r2):,} objects", "✗ wrong extension")
 
         if missing_local:
             print_section("Missing locally — convert step needs to run")
@@ -245,6 +267,12 @@ def main() -> None:
         if orphan_r2:
             print_section("Orphan R2 objects (no record references them)")
             show_items(orphan_r2)
+        if stray_local:
+            print_section("Stray local files (non-webp — pipeline residue)")
+            show_items(stray_local)
+        if stray_r2:
+            print_section("Stray R2 objects (non-webp — should not exist)")
+            show_items(stray_r2)
 
         print(f"\n{hr()}")
         if all_good:
@@ -253,18 +281,19 @@ def main() -> None:
             print("  Status: OUT OF SYNC  ✗".center(BOX_W))
         print(hr())
 
-    if args.delete_orphans and (orphan_local or orphan_r2):
+    if args.delete_orphans and (orphan_local or orphan_r2 or stray_local or stray_r2):
         if not args.yes:
-            n = len(orphan_local) + len(orphan_r2)
-            if not confirm(f"\nDelete {n:,} orphan WebP file(s)?"):
+            n = len(orphan_local) + len(orphan_r2) + len(stray_local) + len(stray_r2)
+            if not confirm(f"\nDelete {n:,} orphan + stray file(s)?"):
                 print("Aborted.")
                 sys.exit(2)
-        deleted_local = delete_local(orphan_local)
-        deleted_r2 = delete_r2(s3, orphan_r2)
+        deleted_local = delete_local(orphan_local | stray_local)
+        deleted_r2 = delete_r2(s3, orphan_r2 | stray_r2)
         print(f"\nDeleted: {deleted_local} local, {deleted_r2} R2")
 
     # Non-zero exit when something is out of sync — handy for CI / git hooks.
-    if missing_local or missing_r2 or orphan_local or orphan_r2:
+    if (missing_local or missing_r2 or orphan_local or orphan_r2
+            or stray_local or stray_r2):
         sys.exit(1)
 
 

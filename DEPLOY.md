@@ -3,22 +3,23 @@
 ```
 GitHub repo (F:\chord\)         Cloudflare R2  (chord-images)
    ├ src/                          70k WebP files (~2.5 GB)
-   ├ public/songs.bin (~1.4 MB)
-   ├ functions/images/[[path]].ts  ← Pages Function: proxies R2 same-origin
-   ├ scripts/
-   └ ...
+   ├ public/songs.bin (~1.4 MB)         │   bound to custom domain
+   ├ scripts/                            │   img.yourdomain.com
+   └ ...                                 │   (Snippet adds CORS)
         │                                │
         ▼                                ▼
-   Cloudflare Pages          (no public bucket URL needed)
-   chord.you.com                    │
+   Cloudflare Pages              R2 Custom Domain
+   chord.you.com                 img.you.com
         │                            │
-        └──── <img src="/images/{name}.webp"> ──→ Pages Function ──→ R2 ──┘
+        └──── <img src="https://img.you.com/{name}.webp"> ──→ R2 edge ──┘
 ```
 
-Images are proxied through the Pages Function `functions/images/[[path]].ts`
-so the browser sees them as same-origin. That avoids cross-origin opaque
-responses (and Chrome's 1-7 MB-per-entry "side-channel padding" tax that
-would make the 70k offline cache balloon from ~3 GB to ~500 GB).
+Images are served from the R2 Custom Domain directly. A Response
+Header Transform Rule at that hostname adds
+`Access-Control-Allow-Origin: *` so the browser treats responses as
+"cors" (not opaque) — avoids Chrome's 1-7 MB-per-entry padding tax
+that would balloon the offline cache from ~3 GB to ~500 GB. Traffic
+hits R2 at the edge directly with no JS execution in the hot path.
 
 ## Privacy reality check
 
@@ -76,11 +77,11 @@ your machine. You'll set them again as Pages env vars below.
    VITE_FIREBASE_PROJECT_ID     chord-1a556
    VITE_FIREBASE_APP_ID         1:...
    VITE_FIREBASE_DB_URL         https://chord-1a556-default-rtdb.asia-southeast1.firebasedatabase.app
+   VITE_IMAGE_BASE              https://img.yourdomain.com
    ```
-   **Do NOT set `VITE_IMAGE_BASE`** — leave it unset. `src/lib/imageUrl.ts`
-   defaults to `/images`, which is the same-origin path served by the
-   Pages Function. If you set a CDN URL here, the cross-origin opaque-
-   padding tax comes back.
+   `VITE_IMAGE_BASE` must point at the R2 Custom Domain you'll set up
+   in Step 3. The Snippet attached at that hostname returns CORS
+   headers so the browser can `cache.put()` non-opaque responses.
 4. Save & deploy. First build takes 1–2 minutes.
 
 The site is live at `https://<project>.pages.dev`. Bind a custom domain
@@ -88,22 +89,64 @@ under **Custom domains** when ready.
 
 ---
 
-## Step 3 — Create the R2 bucket + Pages binding
+## Step 3 — Create the R2 bucket + Custom Domain + CORS Snippet
 
 1. **R2 → Create bucket** → name it `chord-images`.
-2. **Pages project → Settings → Functions → R2 bucket bindings →
-   Add binding**:
-   - **Variable name:** `IMAGES`
-   - **R2 bucket:** `chord-images`
-3. (Optional, for dev only) R2 bucket → Settings → **Public Development
-   URL** → enable. Copy that URL into `.env.local` as `VITE_IMAGE_BASE`
-   so local dev hits R2 directly (no Pages Function locally).
-   - The bucket's CORS Policy needs `AllowedOrigins: ["*"]` for the public
-     dev URL to honour preflight on dev origins.
 
-The Pages Function reads from the `IMAGES` binding directly (no HTTP
-request to R2), so no R2 custom domain or public URL is needed for
-production.
+2. **R2 → chord-images → Settings → Custom Domains → Connect Domain**.
+   Enter the subdomain you want to serve images from, e.g.
+   `img.yourdomain.com`. Cloudflare auto-creates the CNAME and the
+   bucket starts answering on that hostname.
+
+3. **Add CORS headers at the new hostname.** Two ways depending on
+   plan; both work, neither needs OPTIONS handling because `<img>`
+   and our bulk-download `fetch` issue simple GETs (no preflight).
+
+   **Option A — Transform Rules (Free plan, recommended)**:
+   Dashboard → zone → Rules → Transform Rules → **Modify Response
+   Header** → Create rule.
+   - Filter: `(http.host eq "img.yourdomain.com")`
+   - Actions (Set static, four of them):
+     | Header | Value |
+     |---|---|
+     | `Access-Control-Allow-Origin` | `*` |
+     | `Access-Control-Expose-Headers` | `ETag, Content-Length, Content-Type` |
+     | `Cross-Origin-Resource-Policy` | `cross-origin` |
+     | `Vary` | `Origin` |
+
+   **Option B — Snippets (Pro+ plans)**:
+   Dashboard → zone → Rules → Snippets → Create Snippet
+   `r2-images-cors`. Matcher: `http.host eq "img.yourdomain.com"`.
+   ```js
+   export default {
+     async fetch(request) {
+       if (request.method === "OPTIONS") {
+         return new Response(null, {
+           status: 204,
+           headers: {
+             "Access-Control-Allow-Origin": "*",
+             "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+             "Access-Control-Allow-Headers": "*",
+             "Access-Control-Max-Age": "86400",
+           },
+         });
+       }
+       const upstream = await fetch(request);
+       const headers = new Headers(upstream.headers);
+       headers.set("Access-Control-Allow-Origin", "*");
+       headers.set("Access-Control-Expose-Headers", "ETag, Content-Length, Content-Type");
+       headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+       headers.set("Vary", "Origin");
+       return new Response(upstream.body, {
+         status: upstream.status,
+         statusText: upstream.statusText,
+         headers,
+       });
+     },
+   };
+   ```
+   Use the Snippet if you ever add credentialed/custom-header fetches —
+   it can handle OPTIONS preflight; Transform Rules can't.
 
 ---
 
@@ -181,7 +224,6 @@ just picks up where it left off.
 | Item | Location | In Git? | Notes |
 |---|---|---|---|
 | Webapp source | `src/` | yes | |
-| Pages Function (R2 proxy) | `functions/images/[[path]].ts` | yes | Reads R2 via `IMAGES` binding |
 | Songs payload | `public/songs.bin` | yes | XOR+gzip, ~1.4 MB; rebuild with `npm run data` |
 | Raw scraped JSON | `data/results.json` | **no** | source of truth, stays local |
 | Image files | `images/` | **no** | WebP, uploaded to R2 separately |

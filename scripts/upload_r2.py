@@ -18,6 +18,7 @@ Usage (in PowerShell):
     python F:\chord\scripts\upload_r2.py F:\some\other\dir
 """
 
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,6 +27,12 @@ from pathlib import Path
 # Make sibling helpers importable when this script is run from any cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _r2 import BUCKET, make_client  # noqa: E402
+
+# Image extensions we know how to convert — see SERVED_EXTS below for the
+# strict upload filter. Anything in here that's still on disk at upload
+# time means the convert step never finished, so we run it automatically
+# to guarantee R2 stays a pure-WebP set.
+RAW_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
 
 # ---- Config -----------------------------------------------------------------
 DEFAULT_DIR = Path(r"F:\chord\images")
@@ -51,8 +58,41 @@ if not LOCAL_DIR.is_dir():
     print(f"ERROR: {LOCAL_DIR} not found")
     sys.exit(1)
 
-# Only upload .webp — the app's `imageUrl()` returns ".webp" paths and the
-# Pages Function proxies them straight from R2. Filtering at upload time
+
+def list_raw_images() -> list[Path]:
+    return [p for p in LOCAL_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in RAW_IMAGE_EXTS]
+
+
+# ---- Pre-flight: auto-convert any leftover raw images ----------------------
+# R2 is a pure-WebP set by contract — if convert_to_webp.py was skipped or
+# crashed mid-run, the leftover PNG/JPG would silently be excluded by the
+# .webp filter below and the bucket would end up out of sync with
+# results.json. Run the converter once before listing, then re-check.
+raw = list_raw_images()
+if raw:
+    print(f"Found {len(raw):,} unconverted image(s) — running convert_to_webp.py first")
+    rc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent / "convert_to_webp.py")]
+    ).returncode
+    if rc != 0:
+        sys.exit(f"\nERROR: convert_to_webp.py exited {rc} — aborting upload.")
+    raw = list_raw_images()
+    if raw:
+        print(f"\nERROR: {len(raw):,} non-WebP file(s) remain after conversion:")
+        for p in sorted(raw)[:10]:
+            print(f"  {p.name}")
+        if len(raw) > 10:
+            print(f"  ... and {len(raw) - 10:,} more")
+        sys.exit(
+            "\nThese are usually HTML error pages saved as .png. Delete them\n"
+            "and remove the matching records from results.json before re-running."
+        )
+    print()
+
+# Only upload .webp — the app's `imageUrl()` returns ".webp" paths and
+# the R2 Custom Domain (with the CORS Snippet) serves them directly.
+# Filtering at upload time
 # stops two classes of mistake from contaminating the bucket:
 #   - leftover .png from before the WebP migration
 #   - HTML error pages that download.py saved as .png because the upstream

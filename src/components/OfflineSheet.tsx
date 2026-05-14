@@ -13,19 +13,19 @@ import {
   getStorageInfo,
   requestPersistentStorage,
   startBulkDownload,
+  startRetryFailed,
   subscribeCacheChange,
   subscribeDownload,
   absoluteImageUrl,
   type StorageInfo,
 } from "../lib/offlineDownload";
 
-// Higher concurrency wins on Cloudflare R2: their edge speaks HTTP/2 so all
-// 16 requests share one TCP+TLS connection, and the per-image cost reduces
-// to just the body transfer. We saw ~3× speedup going 6→16 on a 200 Mbps
-// fiber link with no throttling. Going higher (24–32) sometimes triggers
-// browser-side throttling or hits R2's per-connection concurrent-stream
-// limit, so 16 is the sweet spot.
-const CONCURRENCY = 16;
+// Initial parallelism for the bulk download. The adaptive loop in
+// downloadAllSongs treats this as a ceiling — it'll halve on transient
+// failure (429/5xx/network) and ramp back up to this value when the
+// network steadies. 32 works well on HTTP/2 (R2 Custom Domain edge);
+// slow 4G is auto-detected and walked back down to 4.
+const CONCURRENCY = 32;
 
 export function OfflineButton() {
   const [open, setOpen] = useState(false);
@@ -177,6 +177,12 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
     // singleton's `progress: null` reset already triggered a re-render.
   }
 
+  async function retry() {
+    if (!progress || progress.failedIds.length === 0) return;
+    await requestPersistentStorage();
+    startRetryFailed(songs, progress.failedIds, CONCURRENCY);
+  }
+
   const total = songs.length;
   const allDone = cachedCount === total && total > 0;
   const remaining = total - cachedCount;
@@ -301,6 +307,13 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
                     · ล้มเหลว {progress.failed}
                   </span>
                 )}
+                {downloading && progress.concurrency < CONCURRENCY && (
+                  // The adaptive loop dropped below the ceiling — surface
+                  // it so the user knows "slow" isn't their app freezing.
+                  <span className="ml-2 text-amber-300/80">
+                    · ลดเหลือ {progress.concurrency} parallel
+                  </span>
+                )}
               </span>
               <span className="font-mono text-ink-mute">
                 {Math.round((progress.done / progress.total) * 100)}%
@@ -312,6 +325,26 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
                 style={{ width: `${(progress.done / progress.total) * 100}%` }}
               />
             </div>
+          </div>
+        )}
+
+        {/* Retry-failed band — only after a finished run that left some
+            songs behind. Hidden mid-download so the user doesn't fire a
+            second pass while the first is still going. */}
+        {!downloading && progress && progress.failedIds.length > 0 && (
+          <div className="mb-4 flex items-center gap-2.5 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-3.5 py-2.5 text-[13px] leading-[1.5]">
+            <span className="flex-1 text-amber-100/90">
+              <span className="font-semibold">
+                {progress.failedIds.length.toLocaleString()} เพลง
+              </span>{" "}
+              โหลดไม่สำเร็จ
+            </span>
+            <button
+              onClick={retry}
+              className="rounded-xl border border-amber-400/40 bg-amber-400/15 px-3 py-1.5 text-[12px] font-semibold text-amber-100 transition hover:bg-amber-400/25 active:scale-95"
+            >
+              ลองโหลดใหม่
+            </button>
           </div>
         )}
 

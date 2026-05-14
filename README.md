@@ -31,7 +31,7 @@ members watching the singer's pick).
 - Firebase Realtime DB (room sync) + Firestore (per-client cross-device sync)
 - vite-plugin-pwa (custom SW under `injectManifest`)
 - idb-keyval for persisted favorites/playlists/latest
-- Cloudflare Pages Functions + R2 (image hosting, see DEPLOY.md)
+- Cloudflare R2 Custom Domain + Snippet (image hosting, see DEPLOY.md)
 
 ## Get started
 
@@ -118,8 +118,6 @@ F:\chord\
 │   └── results.json                 # [{id, src, alt}, ...]
 ├── images\                          # WebP chord sheets (gitignored, ~2.5 GB)
 ├── logs\                            # script run logs (gitignored)
-├── functions\
-│   └── images\[[path]].ts           # Cloudflare Pages Function: R2 proxy
 ├── public\
 │   ├── favicon.svg, icon.svg, robots.txt
 │   ├── _redirects                   # SPA fallback for Pages
@@ -156,13 +154,13 @@ The image source files on disk are **WebP** (near-lossless q=80 — see
 `scripts/convert_to_webp.py`). Original PNGs from chordtabs.in.th are
 downloaded by `download.py` then replaced in place by the convert step.
 
-| Environment | How images are served |
-|---|---|
-| **Dev** | Vite serves them via `imagesMiddleware` in `vite.config.ts` from `F:\chord\images` at `/images/*` (same origin). Or, set `VITE_IMAGE_BASE` to the R2 Public Development URL to hit R2 directly. |
-| **Prod (Cloudflare Pages)** | The Pages Function at `functions/images/[[path]].ts` proxies R2 over the **same origin** as the app. No `VITE_IMAGE_BASE` needed — the default `/images/` path goes straight to the function. Same-origin avoids Chrome's "opaque-response padding" tax that would balloon the offline cache from ~3 GB to ~500 GB. |
+Both **dev** and **prod** set `VITE_IMAGE_BASE` to the same R2 Custom
+Domain (e.g. `https://img.yourdomain.com`). A Transform Rule at that
+hostname adds `Access-Control-Allow-Origin: *` so responses are
+`cors`-not-`opaque` — Chrome's "opaque-response padding" tax stays off
+and the offline cache fits in ~3 GB instead of ~500 GB.
 
-The bucket needs an R2 binding wired up in Pages settings; see
-`DEPLOY.md` for the click-by-click.
+See `DEPLOY.md` for the click-by-click setup.
 
 ## Adding new songs
 

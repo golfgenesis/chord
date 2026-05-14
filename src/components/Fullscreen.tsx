@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../store";
 import { imageUrl } from "../lib/imageUrl";
-import { notifyCacheChanged } from "../lib/offlineDownload";
+import { ensureCached, notifyCacheChanged } from "../lib/offlineDownload";
 
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
@@ -117,25 +117,23 @@ export function Fullscreen() {
         <img
           src={imageUrl(song)}
           alt={song.name}
-          // `crossOrigin="anonymous"` works in both environments:
-          //   - PROD: VITE_IMAGE_BASE=/images → same-origin → attribute is
-          //     a no-op, no CORS check happens, response is "basic", no
-          //     Chrome opaque-padding tax.
-          //   - DEV: VITE_IMAGE_BASE points at the R2 Public Development
-          //     URL which honors the bucket's CORS Policy, so the cross-
-          //     origin fetch returns `Access-Control-Allow-Origin: *`,
-          //     the response is "cors" (not opaque), and again no padding.
-          // The Cloudflare custom-domain R2 URL does NOT return CORS
-          // headers, so don't repoint VITE_IMAGE_BASE there without also
-          // removing this attribute or images will silently fail to load.
+          // VITE_IMAGE_BASE points at the R2 Custom Domain whose
+          // Transform Rule returns `Access-Control-Allow-Origin: *`.
+          // With this attribute the response is "cors" (not opaque)
+          // and Chrome's opaque-padding tax stays off — keeping it
+          // off matters for the offline cache size (3 GB vs 500 GB).
           crossOrigin="anonymous"
           onLoad={() => {
             setLoadedId(song.id);
-            // The SW's CacheFirst put() races with onLoad — the response is
-            // dispatched to the <img> before cache.put resolves. Wait a beat
-            // so getCachedUrlSet() reflects the new entry, then bump the
-            // version so SongList's green dot lights up.
-            setTimeout(notifyCacheChanged, 300);
+            // <img> loaded — but the SW's CacheFirst put() may or may not
+            // have actually cached it (stale SW from a previous deploy,
+            // pattern mismatch on cross-origin R2 URLs, etc). ensureCached
+            // checks the cache directly and writes it ourselves via
+            // cache.put if missing — guarantees the green offline-dot
+            // turns on when it should, not "sometimes".
+            ensureCached(song).then((ok) => {
+              if (ok) notifyCacheChanged();
+            });
           }}
           onClick={(e) => e.stopPropagation()}
           draggable={false}
