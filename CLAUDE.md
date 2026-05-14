@@ -91,11 +91,9 @@ These are deliberate workarounds, not cargo-cult — please don't remove without
 
 Images: served from an **R2 Custom Domain** (e.g. `https://img.yourdomain.com`) bound directly to the `chord-images` bucket. Set `VITE_IMAGE_BASE=https://img.yourdomain.com` in the Pages dashboard (Settings → Environment variables → Production) AND in local `.env.local` so dev and prod fetch identical URLs.
 
-CORS headers are added on the way out via a **Response Header Transform Rule** (Free plan, no Workers quota cost):
-- Filter: `(http.host eq "img.yourdomain.com")`
-- Set static headers: `Access-Control-Allow-Origin: *`, `Access-Control-Expose-Headers: ETag, Content-Length, Content-Type`, `Cross-Origin-Resource-Policy: cross-origin`, `Vary: Origin`
+CORS headers can be supplied either through the **R2 bucket-level CORS Policy** (R2 → bucket → Settings → CORS Policy — works on Custom Domain too, but origins must be listed explicitly, no wildcards) OR through a **Response Header Transform Rule** at the custom-domain hostname (Free plan; `Access-Control-Allow-Origin: *` works for every origin, no per-deploy list maintenance). Either approach works. Pick one.
 
-No OPTIONS handling needed because `<img>` and `fetch()` here issue simple GETs (no preflight). With ACAO + `crossOrigin="anonymous"` on `<img>`, responses are "cors" (not opaque) and avoid Chrome's 7 MB-per-entry padding tax. Without these headers, `cache.put()` in [src/lib/offlineDownload.ts](src/lib/offlineDownload.ts) silently drops entries on Chrome and the offline cache stays empty.
+With ACAO + `crossOrigin="anonymous"` on `<img>`, responses are "cors" (not opaque) and avoid Chrome's 7 MB-per-entry padding tax. Without these headers, `cache.put()` in [src/lib/offlineDownload.ts](src/lib/offlineDownload.ts) silently drops entries on Chrome and the offline cache stays empty.
 
 Dev: set `VITE_IMAGE_BASE` in `.env.local` to the same custom domain prod uses, so dev and prod are byte-identical paths.
 

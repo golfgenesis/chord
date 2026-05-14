@@ -98,11 +98,27 @@ under **Custom domains** when ready.
    `img.yourdomain.com`. Cloudflare auto-creates the CNAME and the
    bucket starts answering on that hostname.
 
-3. **Add CORS headers at the new hostname.** Two ways depending on
-   plan; both work, neither needs OPTIONS handling because `<img>`
-   and our bulk-download `fetch` issue simple GETs (no preflight).
+3. **Add CORS headers.** Three options (any one is enough):
 
-   **Option A — Transform Rules (Free plan, recommended)**:
+   **Option 0 — Bucket CORS Policy (simplest)**:
+   R2 → bucket → Settings → CORS Policy → Edit. Paste a JSON array
+   listing your dev + prod origins (R2 does NOT support wildcards
+   here, so each origin must be listed):
+   ```json
+   [
+     {
+       "AllowedOrigins": ["http://localhost:5173", "https://yourdomain.com"],
+       "AllowedMethods": ["GET", "HEAD"],
+       "AllowedHeaders": ["*"],
+       "ExposeHeaders": ["ETag", "Content-Length", "Content-Type"],
+       "MaxAgeSeconds": 86400
+     }
+   ]
+   ```
+   The policy applies to both pub-URL and Custom Domain. Downside: you
+   must maintain the origin list as you add deploys / domains.
+
+   **Option A — Transform Rules (Free plan, wildcard `*`)**:
    Dashboard → zone → Rules → Transform Rules → **Modify Response
    Header** → Create rule.
    - Filter: `(http.host eq "img.yourdomain.com")`
