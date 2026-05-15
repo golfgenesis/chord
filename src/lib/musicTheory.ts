@@ -17,8 +17,11 @@ export const NOTE_NAMES_FLAT = [
 ] as const;
 
 // Which target keys traditionally read with flats (one or more flats in the
-// signature). For F# / Gb the spelling is a coin-flip; we pick flats so the
-// rendered chord chart matches Gb major's signature.
+// signature). Spellings match the diatonic-chord convention table that
+// musicians read by (e.g. Key Bb → Bb, Cm, Dm, Eb, F, Gm, Adim — flats; Key
+// B → B, C#m, D#m, E, F#, G#m, A#dim — sharps). For F# / Gb the spelling is
+// a coin-flip in theory, but the key picker chip shows "F#" so we pick
+// sharps to keep the chip label consistent with the rendered chord names.
 const PREFER_FLATS_BY_TARGET = [
   false, // C  — no accidentals
   true,  // Db — 5 flats
@@ -26,7 +29,7 @@ const PREFER_FLATS_BY_TARGET = [
   true,  // Eb — 3 flats
   false, // E  — 4 sharps
   true,  // F  — 1 flat
-  true,  // Gb — 6 flats (preferred over F# spelling)
+  false, // F# — 6 sharps (chip label shows "F#", so render sharps too)
   false, // G  — 1 sharp
   true,  // Ab — 4 flats
   false, // A  — 3 sharps

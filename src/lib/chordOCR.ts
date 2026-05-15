@@ -29,7 +29,17 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 14;
+const OCR_VERSION = 15;
+
+// Section-header labels that Tesseract occasionally glues onto the adjacent
+// chord token when kerning is tight ("Intro" + "D" → "IntroD", "BridgeD/G/Em",
+// "VerseC"). When the only chord-shaped substring of a token sits AFTER one
+// of these prefixes we strip the prefix and accept the chord — without this
+// gate the whole token fails vocab snap and the chord is silently dropped.
+// Kept conservative (well-known section names only) so prose words that
+// happen to contain a chord-shaped substring don't slip through.
+const SECTION_PREFIX_RE =
+  /^(intro|verse|chorus|prechorus|bridge|outro|ending|coda|solo|interlude|instru|instrumental|hook|tag|riff)/i;
 const CACHE_PREFIX = "chordroom/ocr/v" + OCR_VERSION + "/";
 
 // Tesseract has a habit of reading "0" for "O", "1" for "I", "S" for "5",
@@ -237,34 +247,50 @@ function snapWordMaybeGlued(
   if (confidence < MIN_CONFIDENCE_OVERALL) return [];
 
   const spans = findChordSpans(normalized);
-  if (spans.length > 1) {
-    const snaps = spans.map((s) => snapChord(s.text));
-    if (snaps.every((s): s is string => s !== null)) {
-      // All spans snap — distribute the bbox by character position.
-      // Each span knows where in the original token it sits, so the
-      // overlay lands on the chord glyph instead of the whitespace /
-      // slash between chords.
-      const totalLen = normalized.length;
-      const width = bbox.x1 - bbox.x0;
+  const snaps = spans.map((s) => snapChord(s.text));
+
+  const totalLen = normalized.length;
+  const width = bbox.x1 - bbox.x0;
+  const slice = (span: ChordSpan, text: string): SnappedChord => ({
+    text,
+    bbox: {
+      x0: bbox.x0 + width * (span.startIdx / totalLen),
+      y0: bbox.y0,
+      x1: bbox.x0 + width * (span.endIdx / totalLen),
+      y1: bbox.y1,
+    },
+  });
+
+  // Every span snapped — trust them. Single-span chord tokens (e.g. "Em7")
+  // and clean glued chord rows ("AmD", "Intro/D/G/Em/A" via slashIsSep mode)
+  // both land here; the bbox slice degenerates to the full bbox when the
+  // span already covers the whole token.
+  if (spans.length > 0 && snaps.every((s): s is string => s !== null)) {
+    return spans.map((s, i) => slice(s, snaps[i]!));
+  }
+
+  // Partial snap. Common pattern: Tesseract glued a section header onto
+  // its adjacent chord(s), so "Bridge" / "Chorus" / "Verse" appear as an
+  // unsnappable first span followed by snappable chord spans. Accept the
+  // snappable suffix only when the prefix-up-to-the-first-hit matches a
+  // known section label, otherwise we'd promote arbitrary lyric tokens
+  // whose tail happens to look like a chord (e.g. "DingoEmma" → "Em").
+  const firstHit = snaps.findIndex((s): s is string => s !== null);
+  if (firstHit >= 0) {
+    const prefix = normalized.slice(0, spans[firstHit].startIdx);
+    if (SECTION_PREFIX_RE.test(prefix)) {
       const out: SnappedChord[] = [];
-      for (let i = 0; i < spans.length; i++) {
-        const startRatio = spans[i].startIdx / totalLen;
-        const endRatio = spans[i].endIdx / totalLen;
-        out.push({
-          text: snaps[i],
-          bbox: {
-            x0: bbox.x0 + width * startRatio,
-            y0: bbox.y0,
-            x1: bbox.x0 + width * endRatio,
-            y1: bbox.y1,
-          },
-        });
+      for (let i = firstHit; i < spans.length; i++) {
+        if (snaps[i]) out.push(slice(spans[i], snaps[i]!));
       }
       return out;
     }
   }
 
-  // Fall back to whole-token snap (or first span if there's only one).
+  // No spans (token has no chord letters) or no section-label rescue path.
+  // Fall back to whole-token snap so length-tolerant fuzzy matches still
+  // recover from OCR typos that span the entire token (e.g. "Ernaj7" →
+  // "Emaj7" when Tesseract miscounts strokes).
   const whole = snapChord(normalized);
   return whole ? [{ text: whole, bbox }] : [];
 }

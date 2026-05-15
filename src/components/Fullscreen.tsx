@@ -11,7 +11,7 @@ import { loadLocal, saveLocal } from "../lib/persist";
 import { ChordOverlay } from "./ChordOverlay";
 import { runChordOCR, type OCRResult } from "../lib/chordOCR";
 import { detectKey, type KeyEstimate } from "../lib/keyDetect";
-import { relativeMajorTonic } from "../lib/musicTheory";
+import { preferFlatsForKey, relativeMajorTonic } from "../lib/musicTheory";
 
 // Auto-fill the From key from OCR's key detection only when at least half
 // the detected chords fit the chosen diatonic scale. With the chord-line
@@ -571,6 +571,13 @@ const KEY_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] as const;
 
 const NOTE_SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"] as const;
 const NOTE_FLAT  = ["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"] as const;
+// Display name for a chosen key. Flats vs sharps follow the diatonic-chord
+// convention table musicians read by (Db/Eb/Ab/Bb major print flats; D/E/A/B
+// and F# major print sharps), so the chip/grid label stays in lockstep with
+// the chord names rendered on the sheet.
+function keyDisplay(k: number): string {
+  return preferFlatsForKey(k) ? NOTE_FLAT[k] : NOTE_SHARP[k];
+}
 const POPOVER_WIDTH = 296;
 
 // Tier thresholds calibrated against the diatonic-fit confidence scale —
@@ -710,11 +717,11 @@ function DetectionChip({
         ) : (
           <>
             <span className={`inline-block size-2 rounded-full ${dotClass}`} aria-hidden="true" />
-            <span className="tabular-nums">{NOTE_SHARP[fromKey]}</span>
+            <span className="tabular-nums">{keyDisplay(fromKey)}</span>
             {transposeActive && (
               <>
                 <span className="opacity-50">→</span>
-                <span className="tabular-nums">{NOTE_SHARP[toKey]}</span>
+                <span className="tabular-nums">{keyDisplay(toKey)}</span>
               </>
             )}
             <ChevronDownIcon flip={open} />
@@ -860,7 +867,7 @@ function KeyGrid({
                   : "bg-white/[0.06] text-white/85 hover:bg-white/[0.12]"
               }`}
             >
-              {NOTE_SHARP[k]}
+              {keyDisplay(k)}
             </button>
           );
         })}
