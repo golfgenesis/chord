@@ -62,18 +62,23 @@ registerRoute(
   imagePattern,
   new CacheFirst({
     cacheName: "chord-images",
-    // The R2 Custom Domain's Transform Rule sets `Vary: Origin` on every
-    // response. Workbox's default cache.match() then refuses to serve a
-    // cached entry unless the stored Request's Origin header matches the
-    // new request's — but `cache.put(url, res)` in offlineDownload.ts
-    // stores a Request constructed from a string URL, which has no
-    // Origin header, while the live `<img crossOrigin="anonymous">`
-    // request DOES have one. Result: cache.keys() finds the entry (so
-    // the green dot lights up) but cache.match() comes up empty and the
-    // offline image fails. ignoreVary: true skips that check — safe for
-    // us because we always serve the same body regardless of Origin.
+    // R2 Custom Domain sends `Vary: Origin`. Two protections layered:
+    //   1) cacheKeyWillBeUsed — normalize the storage key to `new
+    //      Request(url)` so SW (live <img> with Origin) and JS bulk
+    //      download (`cache.put(url, res)` with no Origin) hit the SAME
+    //      entry. Without this both paths wrote different keys for the
+    //      same URL → 2× storage, hitting Safari's tight quota at
+    //      ~halfway through a 70k bulk pre-cache.
+    //   2) matchOptions.ignoreVary — belt-and-suspenders against any
+    //      legacy entries from before #1 that still have an Origin in
+    //      their key. Cheap and safe (we serve identical bytes regardless
+    //      of caller's Origin).
     matchOptions: { ignoreVary: true },
     plugins: [
+      {
+        cacheKeyWillBeUsed: async ({ request }) =>
+          new Request(request.url),
+      },
       new ExpirationPlugin({
         // Headroom over the 70,107-song dataset so the offline-mode bulk
         // download doesn't evict its own files as it walks past 10k.

@@ -10,6 +10,7 @@ import {
   getCachedUrlSet,
   getCacheVersion,
   getDownloadState,
+  getRecommendedConcurrency,
   getStorageInfo,
   requestPersistentStorage,
   startBulkDownload,
@@ -20,12 +21,13 @@ import {
   type StorageInfo,
 } from "../lib/offlineDownload";
 
-// Initial parallelism for the bulk download. The adaptive loop in
-// downloadAllSongs treats this as a ceiling — it'll halve on transient
-// failure (429/5xx/network) and ramp back up to this value when the
-// network steadies. 32 works well on HTTP/2 (R2 Custom Domain edge);
-// slow 4G is auto-detected and walked back down to 4.
-const CONCURRENCY = 32;
+// Initial parallelism ceiling for the bulk download. The pool in
+// downloadAllSongs halves on transient failure (429/5xx/network/timeout)
+// and ramps back up to this value when the network steadies. Picked per-
+// platform: iOS Safari handles fewer concurrent H2 streams cleanly and
+// background-throttles tabs aggressively, so it gets a lower ceiling.
+// Desktop / non-iOS sits at the higher value.
+const CONCURRENCY = getRecommendedConcurrency();
 
 export function OfflineButton() {
   const [open, setOpen] = useState(false);

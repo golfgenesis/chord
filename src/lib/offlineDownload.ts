@@ -9,20 +9,52 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Song } from "../types";
 import { imageUrl } from "./imageUrl";
+import { isIOS } from "./platform";
 
 const CACHE_NAME = "chord-images";
 
-// Adaptive concurrency tuning — start aggressive, back off on throttle.
-// HTTP/2 same-origin handles ~32 streams comfortably; some flakey 4G
-// connections only handle ~4. The pool resizes between these bounds.
-// Initial size comes from the caller (OfflineSheet's CONCURRENCY); MIN
-// and MAX are the floor/ceiling the adaptive loop will move between.
-const MAX_BATCH = 64;
-const MIN_BATCH = 4;
-// Per-batch transient-failure ratio that triggers a halving.
+// Adaptive concurrency tuning — start with a sensible default, back off on
+// throttle, ramp back up when the network steadies. The pool resizes
+// between MIN and MAX. Defaults differ by platform: iOS Safari handles
+// fewer concurrent HTTP/2 streams cleanly and background-throttles tabs
+// aggressively (a single hung stream stalls the whole pool), so we keep
+// the ceiling low. Desktop Chrome / non-iOS browsers comfortably handle
+// 16+.
+const MAX_WORKERS = 32;
+const MIN_WORKERS = 2;
+const IOS_DEFAULT_WORKERS = 6;
+const NON_IOS_DEFAULT_WORKERS = 16;
+
+/**
+ * Suggested initial pool size for the device we're running on. Returned
+ * value is a CEILING — the adaptive loop will halve under transient
+ * failure and climb back up to this value when traffic settles.
+ */
+export function getRecommendedConcurrency(): number {
+  return isIOS() ? IOS_DEFAULT_WORKERS : NON_IOS_DEFAULT_WORKERS;
+}
+
+// Per-fetch deadline. The single largest source of "stuck at N / 70,107"
+// on iPad Safari: backgrounded tabs (jock screen off, swipe to another
+// app, even just scrolling a long list for too long) freeze in-flight
+// fetches without aborting or erroring. Without a timeout each frozen
+// fetch is a permanent stall. 20s is generous for an actual image
+// download over 4G (median is ~1s) but short enough that the pool
+// recovers in seconds, not forever.
+const FETCH_TIMEOUT_MS = 20_000;
+// Rolling window for throttle ratio. Smaller window = more reactive,
+// larger = more stable. 16 is small enough that one bad batch flips us
+// to MIN_WORKERS within seconds.
+const THROTTLE_WINDOW = 16;
+// Transient-failure ratio inside the rolling window that triggers a
+// halving.
 const THROTTLE_RATIO = 0.25;
-// Per-song retry budget for transient errors (5xx, network blip).
+// Per-song retry budget for transient errors (5xx, network blip, timeout).
 const MAX_RETRIES = 3;
+// Progress callback rate-limit. Without this the singleton state churns
+// React re-renders every few ms, which on iPad with the modal's
+// backdrop-blur tanks the UI thread.
+const PROGRESS_THROTTLE_MS = 200;
 
 export interface DownloadProgress {
   done: number;
@@ -128,6 +160,46 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 
+type FetchOutcome =
+  | { kind: "ok"; res: Response }
+  | { kind: "abort" }
+  | { kind: "timeout" }
+  | { kind: "error"; error: unknown };
+
+/**
+ * fetch() wrapped with a hard deadline. Without this on iPad Safari, a
+ * single backgrounded/frozen connection holds a Promise that never settles
+ * and the whole download appears stuck. Returns a tagged result so the
+ * caller can tell user-abort apart from timeout (timeout → retry/transient,
+ * abort → bail).
+ */
+async function fetchWithTimeout(
+  url: string,
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+): Promise<FetchOutcome> {
+  if (parentSignal.aborted) return { kind: "abort" };
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, timeoutMs);
+  const onParentAbort = () => ctrl.abort();
+  parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    return { kind: "ok", res };
+  } catch (e) {
+    if (timedOut) return { kind: "timeout" };
+    if (parentSignal.aborted) return { kind: "abort" };
+    return { kind: "error", error: e };
+  } finally {
+    window.clearTimeout(timeoutId);
+    parentSignal.removeEventListener("abort", onParentAbort);
+  }
+}
+
 /**
  * Fetch one image, cache it directly via `cache.put()`, and report back what
  * happened. We deliberately bypass the SW route by writing the response
@@ -146,7 +218,6 @@ async function downloadOne(
   signal: AbortSignal,
 ): Promise<DownloadResult> {
   const url = imageUrl(song);
-  let lastErr: unknown;
   // Track "has this song failed at least once for a real reason (not
   // abort)?" — so if the user pauses mid-retry, we don't pretend the
   // song was just in-flight. Songs that have already had a real failure
@@ -155,11 +226,16 @@ async function downloadOne(
   let hadFailure = false;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (signal.aborted) return hadFailure ? "transient" : "aborted";
-    try {
-      // Default cors mode. VITE_IMAGE_BASE points at the R2 Custom
-      // Domain whose Transform Rule returns Access-Control-Allow-Origin
-      // — response is "cors" (not opaque), no Chrome padding tax.
-      const res = await fetch(url, { signal });
+    // Default cors mode. VITE_IMAGE_BASE points at the R2 Custom Domain
+    // whose Transform Rule returns Access-Control-Allow-Origin — response
+    // is "cors" (not opaque), no Chrome padding tax. Wrapped in a hard
+    // timeout: backgrounded Safari tabs freeze fetches without aborting
+    // and the un-timed version would stall the worker forever.
+    const outcome = await fetchWithTimeout(url, signal, FETCH_TIMEOUT_MS);
+    if (outcome.kind === "abort") return hadFailure ? "transient" : "aborted";
+    if (outcome.kind === "ok") {
+      const res = outcome.res;
+      if (res.status === 404) return "permanent";
       if (res.ok) {
         try {
           await cache.put(url, res);
@@ -168,34 +244,23 @@ async function downloadOne(
           // persisting — and on Firefox very rarely under heavy parallel
           // writes. One cache.match here turns "thought we cached" into
           // "know we cached" so the done counter never lies about state.
-          const stored = await cache.match(url);
-          if (!stored) {
-            lastErr = "cache.put silently dropped entry";
-            hadFailure = true;
-          } else {
-            return "ok";
-          }
-        } catch (e) {
-          // Quota exhaustion shows up here as QuotaExceededError. Body
-          // is consumed by the failed put, so we can't retry without a
-          // fresh fetch — count as transient and let the batch logic
-          // throttle down.
-          lastErr = e;
+          // ignoreVary because the stored response carries `Vary: Origin`
+          // from the R2 Transform Rule (see sw.ts comment).
+          const stored = await cache.match(url, { ignoreVary: true });
+          if (stored) return "ok";
+          hadFailure = true;
+        } catch {
+          // Quota exhaustion shows up here as QuotaExceededError. Body is
+          // consumed by the failed put, so we can't retry without a fresh
+          // fetch — count as transient and let the pool throttle down.
           hadFailure = true;
         }
-      } else if (res.status === 404) {
-        return "permanent";
       } else {
         // 429, 503, etc — transient
-        lastErr = res.status;
         hadFailure = true;
       }
-    } catch (e) {
-      if ((e as { name?: string })?.name === "AbortError") {
-        return hadFailure ? "transient" : "aborted";
-      }
-      // Network/CORS/TypeError — counts as a real failure
-      lastErr = e;
+    } else {
+      // timeout or network/CORS/TypeError — transient
       hadFailure = true;
     }
     // Exponential backoff with a small jitter to spread retries out.
@@ -208,25 +273,28 @@ async function downloadOne(
       }
     }
   }
-  void lastErr; // last seen but not surfaced — failedIds carries which song
   return "transient";
 }
 
 /**
- * Concurrent bulk-download with an ADAPTIVE batch size. Skips songs that
- * are already cached, calls `onProgress` after each batch finishes, and
- * aborts immediately if the caller calls `signal.abort()`.
+ * Concurrent bulk-download backed by a PROMISE POOL with adaptive sizing.
+ * Skips already-cached songs, calls `onProgress` (throttled to ~200ms) as
+ * work flows, and aborts immediately when `signal.abort()` fires.
  *
- * Per-song failures are split into permanent (404) vs transient (5xx,
- * network blip, quota). Transients get up to MAX_RETRIES retries inside
- * `downloadOne`; if even that fails, the song id lands in `failedIds` so
- * the UI can offer a "retry failed" button instead of re-walking 70k
- * entries.
+ * Pool vs batch — the previous implementation awaited Promise.all on each
+ * batch of N fetches, which meant one frozen fetch held the entire batch
+ * hostage (Safari iPad's #1 stall mode). With a pool, each worker pulls
+ * its next song independently the moment its previous one settles, so a
+ * single slow fetch can't block the rest.
  *
- * Adaptive logic: after each batch, if >THROTTLE_RATIO of slots came back
- * transient, the batch halves (down to MIN_BATCH) and the next iteration
- * sleeps 2 s — the network or origin is struggling, back off. If no
- * transients and we're below the initial size, ramp back up.
+ * Per-song failures split into permanent (404) vs transient (5xx, network
+ * blip, timeout, quota). Transients get MAX_RETRIES retries inside
+ * `downloadOne`; survivors land in `failedIds` for the retry-failed band.
+ *
+ * Adaptive resize — a rolling window (THROTTLE_WINDOW results) tracks the
+ * transient ratio. Above THROTTLE_RATIO → halve the active worker cap
+ * (down to MIN_WORKERS). Zero transients with cap below the initial
+ * value → ramp back by +2.
  */
 export async function downloadAllSongs(
   songs: Song[],
@@ -242,63 +310,152 @@ export async function downloadAllSongs(
   }
 
   const total = songs.length;
-  let done = songs.length - queue.length;
+  let done = total - queue.length;
   let failed = 0;
   const failedIds = new Set<number>();
-  let batchSize = Math.min(MAX_BATCH, Math.max(MIN_BATCH, initialConcurrency));
+  const initial = Math.min(MAX_WORKERS, Math.max(MIN_WORKERS, initialConcurrency));
+  let cap = initial;
+  // Rolling window of recent results — drives adaptive sizing.
+  const recent: DownloadResult[] = [];
 
   const snapshot = (): DownloadProgress => ({
     done,
     total,
     failed,
     failedIds: Array.from(failedIds),
-    concurrency: batchSize,
+    concurrency: cap,
   });
 
-  onProgress(snapshot());
+  // Throttle onProgress so React isn't re-rendering 32×/sec when fetches
+  // come back fast. We always force a tick on cap change and on the final
+  // settlement.
+  let lastTick = 0;
+  let pendingTick: number | null = null;
+  function emitProgress(force = false) {
+    const now = Date.now();
+    if (force || now - lastTick >= PROGRESS_THROTTLE_MS) {
+      if (pendingTick !== null) {
+        window.clearTimeout(pendingTick);
+        pendingTick = null;
+      }
+      lastTick = now;
+      onProgress(snapshot());
+    } else if (pendingTick === null) {
+      const wait = PROGRESS_THROTTLE_MS - (now - lastTick);
+      pendingTick = window.setTimeout(() => {
+        pendingTick = null;
+        lastTick = Date.now();
+        onProgress(snapshot());
+      }, wait);
+    }
+  }
 
-  while (queue.length && !signal.aborted) {
-    const batch = queue.splice(0, batchSize);
-    const results = await Promise.all(
-      batch.map((song) => downloadOne(cache, song, signal)),
-    );
-    let throttled = 0;
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      const song = batch[i];
-      if (r === "ok") {
-        done++;
-      } else if (r === "permanent") {
-        failed++;
-        failedIds.add(song.id);
-      } else if (r === "transient") {
-        // Exhausted retries on a real network/server error. Surface to
-        // UI so the user can pick up later (network coming back, quota
-        // freed, etc.) and count towards adaptive back-off.
-        failed++;
-        failedIds.add(song.id);
-        throttled++;
-      }
-      // r === "aborted" → user hit หยุด mid-flight. Not a failure; the
-      // song just didn't run. Skip silently — ดาวน์โหลดต่อ will pick it
-      // up on the next run via the cache-miss queue.
+  emitProgress(true);
+
+  let head = 0;
+  let inflight = 0;
+  let resolveDone: () => void;
+  const done$ = new Promise<void>((r) => {
+    resolveDone = r;
+  });
+
+  function maybeFinish() {
+    if ((head >= queue.length || signal.aborted) && inflight === 0) {
+      resolveDone();
     }
-    // Adaptive resize.
-    if (throttled / batch.length > THROTTLE_RATIO && batchSize > MIN_BATCH) {
-      batchSize = Math.max(MIN_BATCH, Math.floor(batchSize / 2));
-      onProgress(snapshot());
-      // Brief pause so we don't immediately hammer the origin again.
-      try {
-        await sleep(2000, signal);
-      } catch {
-        break;
-      }
-    } else if (throttled === 0 && batchSize < initialConcurrency) {
-      batchSize = Math.min(initialConcurrency, batchSize + 4);
-      onProgress(snapshot());
-    } else {
-      onProgress(snapshot());
+  }
+
+  function recordResult(song: Song, result: DownloadResult) {
+    recent.push(result);
+    if (recent.length > THROTTLE_WINDOW) recent.shift();
+
+    if (result === "ok") {
+      done++;
+    } else if (result === "permanent") {
+      failed++;
+      failedIds.add(song.id);
+    } else if (result === "transient") {
+      failed++;
+      failedIds.add(song.id);
     }
+    // "aborted" → user hit หยุด mid-flight. Not a failure; the song just
+    // didn't run. Skip silently — ดาวน์โหลดต่อ picks it up on the next run.
+
+    // Adaptive resize once we have a full window of data.
+    if (recent.length >= THROTTLE_WINDOW) {
+      let transients = 0;
+      for (const r of recent) if (r === "transient") transients++;
+      const ratio = transients / recent.length;
+      if (ratio > THROTTLE_RATIO && cap > MIN_WORKERS) {
+        cap = Math.max(MIN_WORKERS, Math.floor(cap / 2));
+        recent.length = 0; // reset window after resize so we don't keep halving
+        emitProgress(true);
+      } else if (ratio === 0 && cap < initial) {
+        cap = Math.min(initial, cap + 2);
+        recent.length = 0;
+        emitProgress(true);
+      }
+    }
+    emitProgress();
+  }
+
+  function pump() {
+    // Top up workers to current cap. Called after each completion AND on
+    // initial spawn. When cap shrinks, this naturally stops spawning;
+    // when it grows, the next completion's pump picks up the slack.
+    while (
+      inflight < cap &&
+      head < queue.length &&
+      !signal.aborted
+    ) {
+      const song = queue[head++];
+      inflight++;
+      downloadOne(cache, song, signal).then(
+        (result) => {
+          inflight--;
+          recordResult(song, result);
+          if (signal.aborted) {
+            maybeFinish();
+          } else {
+            pump();
+          }
+        },
+        () => {
+          // downloadOne shouldn't throw, but be defensive — treat as
+          // transient so it lands in failedIds, not a swallowed error.
+          inflight--;
+          recordResult(song, "transient");
+          if (signal.aborted) {
+            maybeFinish();
+          } else {
+            pump();
+          }
+        },
+      );
+    }
+    maybeFinish();
+  }
+
+  // Abort fast-path — if the user hits หยุด, stop spawning new work and
+  // resolve as soon as in-flight workers drain. The hard fetch timeout
+  // (FETCH_TIMEOUT_MS) bounds the worst-case drain time; in practice
+  // fetch's own AbortSignal makes it instant.
+  const onAbort = () => {
+    emitProgress(true);
+    maybeFinish();
+  };
+  if (signal.aborted) {
+    onAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  pump();
+  await done$;
+  signal.removeEventListener("abort", onAbort);
+  if (pendingTick !== null) {
+    window.clearTimeout(pendingTick);
+    pendingTick = null;
   }
 
   // Bulk-download just wrote a bunch of entries — let subscribers (badges,
@@ -327,6 +484,7 @@ export async function downloadAllSongs(
     for (const id of realFailed) failedIds.add(id);
   }
 
+  emitProgress(true);
   return snapshot();
 }
 
@@ -347,13 +505,24 @@ export async function ensureCached(song: Song): Promise<boolean> {
   try {
     const cache = await caches.open(CACHE_NAME);
     const url = imageUrl(song);
-    const existing = await cache.match(url);
+    // ignoreVary because the stored response carries `Vary: Origin`
+    // from the R2 Transform Rule (see sw.ts).
+    const existing = await cache.match(url, { ignoreVary: true });
     if (existing) return true;
-    const res = await fetch(url);
-    if (!res.ok) return false;
-    await cache.put(url, res);
-    const stored = await cache.match(url);
-    return Boolean(stored);
+    // Same hard deadline as the bulk path — without this an iPad Safari
+    // tab going background mid-load means ensureCached hangs forever and
+    // the green offline-dot never resolves either way.
+    const ctrl = new AbortController();
+    const timeoutId = window.setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) return false;
+      await cache.put(url, res);
+      const stored = await cache.match(url, { ignoreVary: true });
+      return Boolean(stored);
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   } catch {
     return false;
   }
