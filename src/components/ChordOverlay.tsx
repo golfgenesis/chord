@@ -31,17 +31,23 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
   const [layout, setLayout] = useState<Layout | null>(null);
 
   // Compute layout (scale + letterbox offsets) whenever the container size
-  // changes or the image element swaps. We watch BOTH the image and its
-  // parent because either can change independently (image natural size on
-  // load, parent on window resize / orientation change).
+  // changes or the image element swaps.
+  //
+  // We size against the `<img>` element's OWN client box rather than its
+  // parent's. The parent carries a `padding-bottom: var(--safe-bottom)`
+  // for the iOS / iPadOS home-indicator inset (≈34 px on iPad), and
+  // `parent.clientHeight` INCLUDES that padding even though the image
+  // only fills the parent's content box above it. Using parent dimensions
+  // overshoots the letterbox offsetY by half the inset, which is why the
+  // red overlays drifted down past the actual chord glyphs on iPad. The
+  // image element itself reports the box the bitmap is actually drawn
+  // into.
   useLayoutEffect(() => {
     if (!imgEl) return;
-    const parent = imgEl.parentElement;
-    if (!parent) return;
 
     const compute = () => {
-      const cw = parent.clientWidth;
-      const ch = parent.clientHeight;
+      const cw = imgEl.clientWidth;
+      const ch = imgEl.clientHeight;
       const nw = imgEl.naturalWidth;
       const nh = imgEl.naturalHeight;
       if (!cw || !ch || !nw || !nh) {
@@ -57,8 +63,14 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
     };
     compute();
     const ro = new ResizeObserver(compute);
-    ro.observe(parent);
     ro.observe(imgEl);
+    // Still watch the parent: when its size changes (orientation flip,
+    // safe-area inset change after rotation, etc.) the img's percentage-
+    // sized box also resizes, but the ResizeObserver on imgEl alone is
+    // sometimes one frame late on Safari. Observing the parent too makes
+    // recomputes prompt.
+    const parent = imgEl.parentElement;
+    if (parent) ro.observe(parent);
     return () => ro.disconnect();
   }, [imgEl]);
 
@@ -69,10 +81,8 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
     if (!imgEl) return;
     if (imgEl.complete && imgEl.naturalWidth > 0) return;
     const onLoad = () => {
-      const parent = imgEl.parentElement;
-      if (!parent) return;
-      const cw = parent.clientWidth;
-      const ch = parent.clientHeight;
+      const cw = imgEl.clientWidth;
+      const ch = imgEl.clientHeight;
       const nw = imgEl.naturalWidth;
       const nh = imgEl.naturalHeight;
       if (!cw || !ch || !nw || !nh) return;

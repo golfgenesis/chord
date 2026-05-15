@@ -29,7 +29,7 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 13;
+const OCR_VERSION = 14;
 const CACHE_PREFIX = "chordroom/ocr/v" + OCR_VERSION + "/";
 
 // Tesseract has a habit of reading "0" for "O", "1" for "I", "S" for "5",
@@ -92,32 +92,77 @@ function normalizeRaw(raw: string): string {
   return out;
 }
 
+export interface ChordSpan {
+  text: string;       // chord substring (with slashes stripped from edges)
+  startIdx: number;   // start position in original token
+  endIdx: number;     // end position (exclusive) in original token
+}
+
 /**
- * Split a single OCR'd word into substrings that each start with a chord
- * letter [A-G]. Used to recover from the common Tesseract behaviour of
- * gluing tightly-spaced chord pairs ("Am7 D7" on a chord row with narrow
- * spacing → "Am7D7"), which made the fuzzy snapper match the whole token
- * to a single nearby vocab entry (e.g. "Am7b5") and silently lose the
- * second chord.
+ * Locate every chord-like substring inside a single OCR'd word, recording
+ * each one's position within the original token so the caller can split
+ * the bbox proportionally.
  *
- * Slash chord bass notes (the [A-G] right after a "/") are NOT treated as
- * split points: "D/F#" stays one token so it can be parsed as a slash
- * chord.
+ * Two notations are handled:
+ *
+ *  - **Glued chord pairs.** "Am7 D7" rendered with narrow spacing comes
+ *    out of Tesseract as the single token "Am7D7". We split at the
+ *    second [A-G] letter and return both halves.
+ *
+ *  - **Slash-separated chord sequences.** Intro / Instru rows in chord
+ *    sheets often print as "Intro / A / A / A / E / ( 2 Times )", which
+ *    Tesseract occasionally glues into a single token "A/A/A/E". When
+ *    the token contains TWO OR MORE slashes we treat slashes as chord
+ *    separators (not slash-chord-bass markers) and split on each of
+ *    them.
+ *
+ * A single slash in the middle of a token still means slash-chord:
+ * "G/B" → one chord with bass B, no split.
  */
-export function splitGluedChords(token: string): string[] {
-  const parts: string[] = [];
-  let lastStart = 0;
-  for (let i = 1; i < token.length; i++) {
-    const ch = token[i];
-    if (ch >= "A" && ch <= "G") {
-      // The [A-G] right after a "/" is a slash-chord bass — don't split.
-      if (token[i - 1] === "/") continue;
-      parts.push(token.slice(lastStart, i));
-      lastStart = i;
+export function findChordSpans(token: string): ChordSpan[] {
+  if (!token) return [];
+  const slashCount = (token.match(/\//g) ?? []).length;
+  const slashIsSep = slashCount > 1;
+
+  const spans: ChordSpan[] = [];
+  let i = 0;
+  while (i < token.length) {
+    // Skip until we land on a chord-letter start.
+    while (i < token.length) {
+      const ch = token[i];
+      if (ch >= "A" && ch <= "G") break;
+      i++;
     }
+    if (i >= token.length) break;
+
+    const startIdx = i;
+    i++;
+    while (i < token.length) {
+      const ch = token[i];
+      if (ch >= "A" && ch <= "G") {
+        // [A-G] right after "/" is slash-chord bass (keep going) UNLESS
+        // we're in slash-as-separator mode, in which case the next [A-G]
+        // is a fresh chord.
+        if (token[i - 1] === "/" && !slashIsSep) {
+          i++;
+          continue;
+        }
+        break;
+      }
+      if (ch === "/" && slashIsSep) break;
+      i++;
+    }
+
+    const endIdx = i;
+    let text = token.slice(startIdx, endIdx);
+    if (text.endsWith("/")) text = text.slice(0, -1);
+    spans.push({ text, startIdx, endIdx });
+
+    // In separator mode, consume the slash that ended this chord so the
+    // next chord starts right after.
+    if (slashIsSep && i < token.length && token[i] === "/") i++;
   }
-  parts.push(token.slice(lastStart));
-  return parts;
+  return spans;
 }
 
 // Lazy singleton — the worker is heavy to spin up (downloads WASM + model),
@@ -179,10 +224,11 @@ interface SnappedChord {
 }
 
 // Try to extract one or more chord matches from a single normalised OCR
-// word. If splitting on chord boundaries yields parts that all snap to
-// the vocabulary, the bbox is divided proportionally by character count
-// and each part is returned as its own chord. Otherwise the whole token
-// is snapped as a single chord (the common case).
+// word. Uses `findChordSpans` (which records each candidate's start/end
+// position inside the original token) so the source bbox can be sliced
+// horizontally and each chord lands on its actual visual position —
+// including for slash-separated sequences like "A/A/A/E" where the
+// slashes occupy bbox space between chords.
 function snapWordMaybeGlued(
   normalized: string,
   confidence: number,
@@ -190,22 +236,20 @@ function snapWordMaybeGlued(
 ): SnappedChord[] {
   if (confidence < MIN_CONFIDENCE_OVERALL) return [];
 
-  const parts = splitGluedChords(normalized);
-  if (parts.length > 1) {
-    const snaps = parts.map((p) => snapChord(p));
+  const spans = findChordSpans(normalized);
+  if (spans.length > 1) {
+    const snaps = spans.map((s) => snapChord(s.text));
     if (snaps.every((s): s is string => s !== null)) {
-      // All parts snap — distribute the bbox horizontally in proportion
-      // to each part's character count. Approximate (real glyph widths
-      // vary) but close enough that each overlay still lands on the
-      // right chord visually.
+      // All spans snap — distribute the bbox by character position.
+      // Each span knows where in the original token it sits, so the
+      // overlay lands on the chord glyph instead of the whitespace /
+      // slash between chords.
       const totalLen = normalized.length;
       const width = bbox.x1 - bbox.x0;
-      let cursor = 0;
       const out: SnappedChord[] = [];
-      for (let i = 0; i < parts.length; i++) {
-        const startRatio = cursor / totalLen;
-        cursor += parts[i].length;
-        const endRatio = cursor / totalLen;
+      for (let i = 0; i < spans.length; i++) {
+        const startRatio = spans[i].startIdx / totalLen;
+        const endRatio = spans[i].endIdx / totalLen;
         out.push({
           text: snaps[i],
           bbox: {
@@ -220,6 +264,7 @@ function snapWordMaybeGlued(
     }
   }
 
+  // Fall back to whole-token snap (or first span if there's only one).
   const whole = snapChord(normalized);
   return whole ? [{ text: whole, bbox }] : [];
 }
