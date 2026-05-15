@@ -442,14 +442,34 @@ export function Fullscreen() {
     };
   }, [song]);
 
-  // Pinch-zoom + pan + double-tap on the zoom wrapper. Native touch events
-  // (not Pointer Events) because iOS Safari's multi-touch via Pointer Events
-  // is still flaky for simultaneous touches in PWAs — touchstart/move/end
-  // is the boring path that always reports both fingers. `touch-action: none`
+  // PWA standalone mode (iOS Add-to-Home-Screen, installed Chrome/Edge PWAs)
+  // locks the viewport at scale=1 and ignores mid-page `user-scalable=yes`
+  // meta changes — so on those installs we can't rely on the browser's
+  // native pinch and run a custom CSS-transform handler instead. In regular
+  // Safari / Chrome on iPhone / iPad, the viewport meta we set on open lets
+  // iOS handle pinch natively, which is buttery in a way no JS fake can
+  // match — so we yield to the browser by setting `touch-action: pinch-zoom`
+  // and skipping the custom handler entirely.
+  const isStandalone = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const navAny = window.navigator as Navigator & { standalone?: boolean };
+    return (
+      navAny.standalone === true ||
+      (typeof window.matchMedia === "function" &&
+        window.matchMedia("(display-mode: standalone)").matches)
+    );
+  }, []);
+
+  // Custom transform-based pinch / pan / double-tap — only wired up in PWA
+  // standalone mode (see `isStandalone` above). Native touch events (not
+  // Pointer Events) because iOS Safari's multi-touch via Pointer Events is
+  // still flaky for simultaneous touches in PWAs — touchstart/move/end is
+  // the boring path that always reports both fingers. `touch-action: none`
   // on the wrapper plus explicit preventDefault inside two-finger move
-  // suppresses the browser's own pinch / double-tap zoom that would
+  // suppresses any residual browser pinch / double-tap zoom that would
   // otherwise compete with ours.
   useEffect(() => {
+    if (!isStandalone) return;
     const el = zoomWrapRef.current;
     if (!el) return;
 
@@ -637,12 +657,12 @@ export function Fullscreen() {
       el.removeEventListener("touchend", onEnd);
       el.removeEventListener("touchcancel", onEnd);
     };
-  }, [setZoom]);
+  }, [setZoom, isStandalone]);
 
   if (!song) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-black">
+    <div className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-bg bg-page-grad">
       <header
         className="relative z-10 flex shrink-0 items-center gap-2 border-b border-white/[0.08] glass-strong px-3.5 py-2.5 text-white sm:gap-3 sm:px-5 sm:py-3"
         style={{ paddingTop: "calc(0.625rem + var(--safe-top))" }}
@@ -724,20 +744,24 @@ export function Fullscreen() {
       </header>
 
       {/* Image fills 100% of remaining area — no padding, no border, no
-          rounded corners. `filter: invert(1) hue-rotate(180deg)` flips white
-          paper → black + black ink → white, while preserving any color
-          highlights in the chord notation. The dark gutters (when aspect
-          ratios differ) match the page bg seamlessly. */}
+          rounded corners. `filter: invert(1)` flips white paper → black +
+          black ink → white. The dark gutters (when aspect ratios differ)
+          match the page bg seamlessly.
+
+          Loading + error states keep this layer transparent so the outer
+          wrapper's `bg-bg bg-page-grad` (matching the song-list page) shows
+          through. Once the chord sheet decodes we paint the chord-paper
+          white (or black in invert mode) underneath — and the swap is
+          INSTANT, not a fade. Any easing here trails behind the image
+          paint, so users see the image first and the gutter fades in
+          afterwards. Flipping together is what reads as "just appeared". */}
       <div
-        className={`relative min-h-0 flex-1 overflow-hidden transition-colors duration-200 ${
-          // When the load fails we swap to the app's dark surface so the
-          // error card lives on a brand-matching background instead of
-          // a stark chord-sheet white (or invert-mode black) gutter.
-          errored
-            ? "bg-bg"
-            : invertImages
+        className={`relative min-h-0 flex-1 overflow-hidden ${
+          loaded
+            ? invertImages
               ? "bg-black"
               : "bg-white"
+            : "bg-transparent"
         }`}
         style={{ paddingBottom: "var(--safe-bottom)" }}
         onClick={close}
@@ -745,19 +769,43 @@ export function Fullscreen() {
         {!loaded && !errored && (
           // Delayed via CSS animation rather than a setTimeout-driven state
           // — cache hits reach `loaded=true` before the 150 ms delay
-          // elapses, so the spinner never paints. Slow loads cross the
+          // elapses, so the indicator never paints. Slow loads cross the
           // threshold and fade in. Pure CSS, no extra state / re-renders.
           //
-          // Spinner sits inside its own dark pill so it stays visible on
-          // BOTH the white (normal) and black (invertImages) chord-sheet
-          // backgrounds. Previously this used `text-white/70` directly on
-          // the bg-white container — invisible white-on-white text was
-          // the entire reason users said "เปิดแล้วเจอหน้าขาว 2 วิ" even
-          // when the spinner was technically active.
-          <div className="spinner-delayed pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-            <div className="flex items-center gap-2.5 rounded-full bg-black/55 px-4 py-2 text-white/85 backdrop-blur-sm">
-              <Spinner />
-              <span className="text-[13px] font-medium">กำลังโหลด...</span>
+          // Mirrors the App-shell loader at [App.tsx](../App.tsx): brand-
+          // grad rounded tile with a soft glowing halo + the play icon that
+          // matches the header's brand mark, so the loading state reads as
+          // a deliberate part of the design system instead of a transient
+          // toast. The `pulse-glow` keyframe gives the "actively working"
+          // signal; no spinning element needed.
+          <div className="spinner-delayed pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-5 px-6">
+            <div className="relative">
+              <div
+                aria-hidden
+                className="absolute inset-0 -m-6 rounded-full bg-brand-grad opacity-30 blur-3xl"
+              />
+              <div className="relative grid size-16 place-items-center rounded-2xl bg-brand-grad shadow-glow ring-1 ring-white/10 animate-pulse-glow">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-b from-white/25 to-transparent"
+                />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="relative size-7 text-white"
+                  aria-hidden="true"
+                >
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+            </div>
+            <div className="flex flex-col items-center gap-1 text-center">
+              <p className="font-display text-[14px] font-semibold tracking-[-0.005em] text-ink">
+                กำลังเปิดเพลง
+              </p>
+              <p className="max-w-[280px] truncate text-[12px] text-ink-mute">
+                {song.name}
+              </p>
             </div>
           </div>
         )}
@@ -772,10 +820,18 @@ export function Fullscreen() {
             live inside so they scale together as one unit. ChordOverlay
             positions itself off `imgEl.clientWidth/Height` (which are NOT
             affected by CSS transforms), so labels stay glued to chords
-            through every pinch. `touch-action: none` defers all gesture
-            handling to the touch listeners in useEffect; `willChange`
-            keeps the GPU compositor warm so pinch tracking stays jitter-
-            free on iPad. */}
+            through every pinch.
+
+            PWA standalone: `touch-action: none` hands all gesture handling
+            to the touch listeners in useEffect (which run only in this
+            mode), and `willChange: transform` keeps the GPU compositor
+            warm so pinch tracking stays jitter-free.
+
+            Regular browser: `touch-action: pinch-zoom` lets iOS handle
+            two-finger pinch natively via the viewport-meta we set on open.
+            The transform / zoom state stays at identity (the custom
+            handler doesn't run), so this becomes a passive wrapper that
+            doesn't interfere with the browser's own zoom. */}
         <div
           ref={zoomWrapRef}
           className="relative h-full w-full"
@@ -785,7 +841,7 @@ export function Fullscreen() {
             transition: zoom.animate
               ? "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)"
               : "none",
-            touchAction: "none",
+            touchAction: isStandalone ? "none" : "pinch-zoom",
             willChange: "transform",
           }}
         >
@@ -1382,25 +1438,3 @@ function ContrastIcon() {
   );
 }
 
-function Spinner() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5 animate-spin">
-      <circle
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        fill="none"
-        opacity="0.2"
-      />
-      <path
-        d="M22 12a10 10 0 0 1-10 10"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
