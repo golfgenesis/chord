@@ -29,7 +29,7 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 8;
+const OCR_VERSION = 12;
 const CACHE_PREFIX = "chordroom/ocr/v" + OCR_VERSION + "/";
 
 // Tesseract has a habit of reading "0" for "O", "1" for "I", "S" for "5",
@@ -42,12 +42,18 @@ const NORMALIZE_MAP: Record<string, string> = {
   "0": "°", // standalone "0" inside a chord context usually means diminished
 };
 
-// Whitelist of characters Tesseract is allowed to emit. The set is
-// intentionally tight — every char that's not on this list is treated as
-// noise and not output, which mostly means Thai vowels / consonants and
-// stray symbols. We include the degree sign and both Unicode + ASCII
-// accidentals because chord sheets vary by source.
-const CHORD_CHARSET = "ABCDEFGabcdefgHmajinsudo°#♯b♭/0123456789+-";
+// Whitelist of characters Tesseract is allowed to emit. We pass the full
+// English alphabet here — NOT just chord letters — because Tesseract's
+// word grouping relies on being able to recognise ALL the glyphs on a
+// row. The previous tighter whitelist ("ABCDEFGabcdefgHmajinsudo…") was
+// stripping the I/T/R/U letters out of section labels like "Intro" and
+// "Instru", which made Tesseract glue the broken label onto the chord
+// name beside it ("Intro Dm" → "noDm") so the chord couldn't be matched.
+// Letting Tesseract see the labels in full lets it form the right word
+// boundaries; the chord-vocabulary snap downstream is what actually
+// filters chord tokens from prose, not this whitelist.
+const CHORD_CHARSET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz°#♯b♭/0123456789+-()";
 
 // Confidence floors. The single-letter floor exists because plain "A" or
 // "B" tokens are valid chord names AND valid English filler words ("A
@@ -88,20 +94,31 @@ function normalizeRaw(raw: string): string {
 }
 
 /**
- * Run a normalised OCR token through the chord vocabulary's fuzzy snapper.
- * Returns the canonical chord name when the token matches (exactly or
- * within the per-length edit-distance budget enforced by
- * [chordVocab.snapChord](./chordVocab.ts)), otherwise null. The snapper
- * replaces the old strict-regex filter because Tesseract on stylised
- * chord fonts emits enough single-character errors ("m" → "rn", "#" → "$",
- * "j" → "i") that strict matching dropped a third of real chords on
- * busy chord sheets.
+ * Split a single OCR'd word into substrings that each start with a chord
+ * letter [A-G]. Used to recover from the common Tesseract behaviour of
+ * gluing tightly-spaced chord pairs ("Am7 D7" on a chord row with narrow
+ * spacing → "Am7D7"), which made the fuzzy snapper match the whole token
+ * to a single nearby vocab entry (e.g. "Am7b5") and silently lose the
+ * second chord.
+ *
+ * Slash chord bass notes (the [A-G] right after a "/") are NOT treated as
+ * split points: "D/F#" stays one token so it can be parsed as a slash
+ * chord.
  */
-function snapToken(token: string, confidence: number): string | null {
-  if (!token) return null;
-  if (confidence < MIN_CONFIDENCE_OVERALL) return null;
-  if (token.length === 1 && confidence < SINGLE_LETTER_CONFIDENCE_MIN) return null;
-  return snapChord(token);
+export function splitGluedChords(token: string): string[] {
+  const parts: string[] = [];
+  let lastStart = 0;
+  for (let i = 1; i < token.length; i++) {
+    const ch = token[i];
+    if (ch >= "A" && ch <= "G") {
+      // The [A-G] right after a "/" is a slash-chord bass — don't split.
+      if (token[i - 1] === "/") continue;
+      parts.push(token.slice(lastStart, i));
+      lastStart = i;
+    }
+  }
+  parts.push(token.slice(lastStart));
+  return parts;
 }
 
 // Lazy singleton — the worker is heavy to spin up (downloads WASM + model),
@@ -118,9 +135,16 @@ function getWorker(): Promise<TesseractWorker> {
     const w = await tesseract.createWorker("eng");
     await w.setParameters({
       tessedit_char_whitelist: CHORD_CHARSET,
-      // PSM 11: "sparse text — find as much text as possible in no
-      // particular order". Beats the default "auto block" mode on chord
-      // sheets because chord labels aren't laid out as continuous prose.
+      // PSM SPARSE_TEXT (11): "find text anywhere on the page, no fixed
+      // ordering". Chord sheets aren't continuous prose — they're a mix
+      // of widely-spaced chord labels, lyric rows, and section headers
+      // — and SPARSE_TEXT's per-word geometry stays tightly anchored to
+      // the actual ink positions. We briefly experimented with PSM AUTO
+      // (3) for its layout analysis, but AUTO regroups words into
+      // "blocks/columns" and the bboxes drifted off the underlying
+      // glyphs, so the red overlays painted next to (not over) the
+      // chord text. Stick with SPARSE_TEXT; coverage gaps are better
+      // addressed by snap fuzziness and line-classification fallbacks.
       tessedit_pageseg_mode: tesseract.PSM.SPARSE_TEXT,
     });
     return w;
@@ -163,14 +187,64 @@ function eachLine(page: TesseractPage): TesseractLine[] {
 // most-forgiving of the three.
 const CHORD_LINE_RATIO_MIN = 0.3;
 
+interface SnappedChord {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+}
 interface LineToken {
   word: TesseractWord;
   normalized: string;
-  // The snapped canonical chord name, or null if the token didn't match
-  // anything in the vocabulary. Stored alongside the raw text so we can
-  // both classify the line (chord-density ratio uses `snapped !== null`)
-  // and persist the cleaned-up chord name to the cache.
-  snapped: string | null;
+  // One Tesseract word can yield MULTIPLE chord matches when it turns out
+  // to be two adjacent chords glued together by tight spacing
+  // ("Am7D7"). Empty array = nothing chord-shaped here.
+  chords: SnappedChord[];
+}
+
+// Try to extract one or more chord matches from a single normalised OCR
+// word. If splitting on chord boundaries yields parts that all snap to
+// the vocabulary, the bbox is divided proportionally by character count
+// and each part is returned as its own chord. Otherwise the whole token
+// is snapped as a single chord (the common case).
+function snapWordMaybeGlued(
+  normalized: string,
+  confidence: number,
+  bbox: { x0: number; y0: number; x1: number; y1: number },
+): SnappedChord[] {
+  if (confidence < MIN_CONFIDENCE_OVERALL) return [];
+  if (normalized.length === 1 && confidence < SINGLE_LETTER_CONFIDENCE_MIN) return [];
+
+  const parts = splitGluedChords(normalized);
+  if (parts.length > 1) {
+    const snaps = parts.map((p) => snapChord(p));
+    if (snaps.every((s): s is string => s !== null)) {
+      // All parts snap — distribute the bbox horizontally in proportion
+      // to each part's character count. Approximate (real glyph widths
+      // vary) but close enough that each overlay still lands on the
+      // right chord visually.
+      const totalLen = normalized.length;
+      const width = bbox.x1 - bbox.x0;
+      let cursor = 0;
+      const out: SnappedChord[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        const startRatio = cursor / totalLen;
+        cursor += parts[i].length;
+        const endRatio = cursor / totalLen;
+        out.push({
+          text: snaps[i],
+          bbox: {
+            x0: bbox.x0 + width * startRatio,
+            y0: bbox.y0,
+            x1: bbox.x0 + width * endRatio,
+            y1: bbox.y1,
+          },
+        });
+      }
+      return out;
+    }
+  }
+
+  const whole = snapChord(normalized);
+  return whole ? [{ text: whole, bbox }] : [];
 }
 
 // Minimum absolute number of snapped chord tokens for a line to qualify
@@ -200,13 +274,23 @@ function extractChordsFromLine(
     if (!raw) continue;
     const normalized = normalizeRaw(raw);
     if (!normalized) continue; // pure punctuation / stripped to empty
-    const snapped = snapToken(normalized, word.confidence ?? 0);
-    tokens.push({ word, normalized, snapped });
+    const chords = snapWordMaybeGlued(
+      normalized,
+      word.confidence ?? 0,
+      word.bbox,
+    );
+    tokens.push({ word, normalized, chords });
   }
   if (tokens.length === 0) return [];
 
-  const chordCount = tokens.reduce((n, t) => (t.snapped !== null ? n + 1 : n), 0);
-  const ratio = chordCount / tokens.length;
+  // A word counts as "having a chord" if AT LEAST one snapped chord came
+  // out of it. The split path can produce 2+ chords per word, but for
+  // chord-density classification we still count by source word.
+  const chordWordCount = tokens.reduce(
+    (n, t) => (t.chords.length > 0 ? n + 1 : n),
+    0,
+  );
+  const ratio = chordWordCount / tokens.length;
   // Three independent ways for a line to qualify as a chord row:
   //   - density: most substantive tokens snap to chords
   //   - bulk:    enough snapped chords to be statistically obvious
@@ -214,30 +298,34 @@ function extractChordsFromLine(
   //              section headers like "Intro D" / "Outro G")
   const accept =
     ratio >= CHORD_LINE_RATIO_MIN ||
-    chordCount >= CHORD_LINE_MIN_COUNT ||
-    (chordCount >= 1 && tokens.length <= SHORT_LINE_MAX_SUBSTANTIVE);
+    chordWordCount >= CHORD_LINE_MIN_COUNT ||
+    (chordWordCount >= 1 && tokens.length <= SHORT_LINE_MAX_SUBSTANTIVE);
   if (!accept) return [];
 
   const out: ChordToken[] = [];
   for (const t of tokens) {
-    if (t.snapped === null) continue;
-    out.push({
-      // Use the snapped canonical name — transposition operates on a
-      // clean chord symbol regardless of what Tesseract actually wrote.
-      text: t.snapped,
-      raw: t.word.text,
-      // Bboxes come back from Tesseract in the upscaled-canvas coordinate
-      // space (see preprocessForOCR's OCR_UPSCALE). Divide back to the
-      // image's natural pixel coordinates here so the overlay can render
-      // against `img.naturalWidth/Height` without knowing about OCR.
-      bbox: {
-        x0: t.word.bbox.x0 / bboxScale,
-        y0: t.word.bbox.y0 / bboxScale,
-        x1: t.word.bbox.x1 / bboxScale,
-        y1: t.word.bbox.y1 / bboxScale,
-      },
-      confidence: t.word.confidence,
-    });
+    for (const c of t.chords) {
+      out.push({
+        // Use the snapped canonical name — transposition operates on a
+        // clean chord symbol regardless of what Tesseract actually wrote.
+        text: c.text,
+        raw: t.word.text,
+        // Bboxes come back from Tesseract in the upscaled-canvas
+        // coordinate space (see preprocessForOCR's OCR_UPSCALE). Divide
+        // back to the image's natural pixel coordinates here so the
+        // overlay can render against `img.naturalWidth/Height` without
+        // knowing about OCR. The per-chord bbox is what
+        // `snapWordMaybeGlued` produced — already split across the
+        // source word's geometry for glued-pair tokens.
+        bbox: {
+          x0: c.bbox.x0 / bboxScale,
+          y0: c.bbox.y0 / bboxScale,
+          x1: c.bbox.x1 / bboxScale,
+          y1: c.bbox.y1 / bboxScale,
+        },
+        confidence: t.word.confidence,
+      });
+    }
   }
   return out;
 }

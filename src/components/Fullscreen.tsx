@@ -372,10 +372,10 @@ export function Fullscreen() {
   return (
     <div className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-black">
       <header
-        className="relative z-10 flex shrink-0 items-center gap-3 border-b border-white/[0.08] glass-strong px-4 py-2.5 text-white sm:px-5 sm:py-3"
+        className="relative z-10 flex shrink-0 items-center gap-2 border-b border-white/[0.08] glass-strong px-3.5 py-2.5 text-white sm:gap-3 sm:px-5 sm:py-3"
         style={{ paddingTop: "calc(0.625rem + var(--safe-top))" }}
       >
-        <div className="relative grid size-9 place-items-center rounded-xl bg-brand-grad shadow-glow-sm ring-1 ring-white/10">
+        <div className="relative grid size-9 shrink-0 place-items-center rounded-xl bg-brand-grad shadow-glow-sm ring-1 ring-white/10">
           <span
             aria-hidden
             className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-b from-white/25 to-transparent"
@@ -388,46 +388,58 @@ export function Fullscreen() {
             <path d="M8 5v14l11-7z" />
           </svg>
         </div>
-        <h2 className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold leading-[1.5] tracking-tight sm:text-[20px] sm:leading-[1.4]">
+        <h2 className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold leading-[1.4] tracking-tight sm:text-[20px] sm:leading-[1.4]">
           {song.name}
         </h2>
-        <DetectionChip
-          status={
-            currentOcrError
-              ? "error"
-              : currentOcr
-              ? "ready"
-              : "loading"
-          }
-          fromKey={fromKey}
-          toKey={toKey}
-          detectedKey={currentOcr?.detectedKey ?? null}
-          chordCount={currentOcr?.result.chords.length ?? 0}
-          transposeActive={transposeActive}
-          onChangeFrom={setFrom}
-          onChangeTo={setTo}
-          onReset={resetTranspose}
-        />
-        <button
-          onClick={toggleInvertImages}
-          className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
-            invertImages
-              ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
-              : "border-white/[0.12] bg-white/[0.06] text-white/80 hover:border-white/20 hover:bg-white/[0.12]"
-          }`}
-          aria-label={invertImages ? "ปิด invert (โหมดสว่าง)" : "เปิด invert (โหมดมืด)"}
-          title={invertImages ? "กำลังใช้โหมดมืด — แตะเพื่อกลับเป็นกระดาษขาว" : "กำลังใช้โหมดสว่าง — แตะเพื่อเปลี่ยนเป็นโหมดมืด"}
-        >
-          <ContrastIcon />
-        </button>
-        <button
-          onClick={close}
-          className="rounded-xl border border-white/[0.12] bg-white/[0.06] px-3.5 py-2 text-[14px] font-semibold tracking-[-0.005em] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition hover:border-white/20 hover:bg-white/[0.12] active:scale-95"
-          aria-label="Close"
-        >
-          ย้อนกลับ
-          <span className="ml-2 hidden text-white/40 sm:inline">ESC</span>
-        </button>
+        {/* Mobile: tight `gap-1.5` makes the 3 controls read as one cohesive
+            toolbar unit instead of three loose buttons. Desktop (`sm:contents`):
+            wrapper dissolves so chip/invert/close become direct header children
+            and pick up the header's gap-3 — original inline layout. */}
+        <div className="flex shrink-0 items-center gap-1.5 sm:contents">
+          <DetectionChip
+            status={
+              currentOcrError
+                ? "error"
+                : currentOcr
+                ? "ready"
+                : "loading"
+            }
+            fromKey={fromKey}
+            toKey={toKey}
+            detectedKey={currentOcr?.detectedKey ?? null}
+            chordCount={currentOcr?.result.chords.length ?? 0}
+            transposeActive={transposeActive}
+            onChangeFrom={setFrom}
+            onChangeTo={setTo}
+            onReset={resetTranspose}
+          />
+          <button
+            onClick={toggleInvertImages}
+            className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
+              invertImages
+                ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
+                : "border-white/[0.12] bg-white/[0.06] text-white/80 hover:border-white/20 hover:bg-white/[0.12]"
+            }`}
+            aria-label={invertImages ? "ปิด invert (โหมดสว่าง)" : "เปิด invert (โหมดมืด)"}
+            title={invertImages ? "กำลังใช้โหมดมืด — แตะเพื่อกลับเป็นกระดาษขาว" : "กำลังใช้โหมดสว่าง — แตะเพื่อเปลี่ยนเป็นโหมดมืด"}
+          >
+            <ContrastIcon />
+          </button>
+          {/* Close button is icon-only (X) on mobile so it matches the chip and
+              invert button as a 9×9 square — a row of three same-height tap
+              targets reads as one toolbar instead of three mismatched controls.
+              Desktop reverts to the text button with its "ESC" hint, since
+              horizontal room is plentiful and the shortcut is genuinely useful. */}
+          <button
+            onClick={close}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.06] text-[14px] font-semibold tracking-[-0.005em] text-white/80 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition hover:border-white/20 hover:bg-white/[0.12] hover:text-white active:scale-95 sm:w-auto sm:gap-2 sm:px-3.5 sm:py-2 sm:text-white"
+            aria-label="Close"
+          >
+            <CloseIcon className="sm:hidden" />
+            <span className="hidden sm:inline">ย้อนกลับ</span>
+            <span className="hidden text-white/40 sm:inline">ESC</span>
+          </button>
+        </div>
       </header>
 
       {/* Image fills 100% of remaining area — no padding, no border, no
@@ -987,6 +999,24 @@ function RetryIcon() {
     >
       <path d="M3 12a9 9 0 1 0 3-6.7" />
       <path d="M3 4v5h5" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`size-[18px] ${className ?? ""}`}
+      aria-hidden="true"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
     </svg>
   );
 }
