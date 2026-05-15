@@ -16,7 +16,8 @@ dist-ssr
 *.local
 npm-debug.log*
 
-# public/songs.json IS committed — it's the slim dataset Pages serves.
+# public/songs.bin IS committed — it's the XOR+gzip-obfuscated dataset
+# Pages serves to the client (decoded in src/lib/songsCodec.ts).
 
 # Editor / OS
 .DS_Store

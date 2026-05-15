@@ -31,7 +31,7 @@ function preloadSongImage(song: Song): void {
 }
 // Firebase + cloudSync are heavy (~300 KB of the Firebase SDK). We import
 // them dynamically so they end up in their own chunk and load in parallel
-// with songs.json — the search UI never blocks on them.
+// with songs.bin — the search UI never blocks on them.
 import type { RoomSync } from "./lib/firebase";
 type FbMod = typeof import("./lib/firebase");
 type CsMod = typeof import("./lib/cloudSync");

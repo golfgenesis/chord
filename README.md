@@ -7,21 +7,119 @@ dataset scraped from chordtabs.in.th.
 Target devices: **iPad** (singer's main view) and **mobile** (other band
 members watching the singer's pick).
 
-## Highlights
+## Features
 
-- Search across all 70k songs in real time (in-memory linear scan, ~10–30 ms)
-- Tap a song → fullscreen chord image; service worker caches images for
-  offline use; favorites, recents, and every playlist (yours + your
-  bandmates') prefetch in the background so they're ready offline next time
-- **Realtime room sync** via Firebase RTDB: 6-digit room code, when one
-  device taps a song the rest see it (with optional auto-open + OS push
-  notification, deep-linkable URL `/{room}/{songId}`)
-- **Per-client playlists**: every member's lists are merged into one
-  picker, owner-first; edits/reorder/delete are gated to your own lists
-- Latest (auto, FIFO), Favorites (★), multiple Playlists with drag-and-
-  drop reorder, persisted offline in IndexedDB (`idb-keyval`)
-- Virtualized list (`react-virtuoso`) — 70k rows scroll smoothly on iOS
-- Installable on iPad/iPhone home screen (PWA manifest + Apple meta tags)
+### Browsing & search
+- **70k-song catalogue** loaded from a single ~1.4 MB obfuscated payload
+  (`public/songs.bin` — XOR + gzip, decoded client-side)
+- **In-memory search** across every title in ~10–30 ms (NFC normalized,
+  case-insensitive, capped at 500 results)
+- **Virtualized list** (`react-virtuoso`) — 70k rows scroll smoothly on
+  iOS / iPad
+- **"ล่าสุด" pin** — the last 30 songs you opened are pinned to the top of
+  the "ทั้งหมด" tab with a brand-grad accent, so picking the next song in a
+  set is always one tap away
+- **Floating scroll-to-top** button appears once you've scrolled away
+  from the top
+
+### Fullscreen chord viewer
+- Tap any row → fullscreen WebP chord sheet, served directly from R2
+- **Image inversion toggle** (top-right ◐) — flips white paper → black,
+  black ink → white, for stage-friendly dark mode while preserving any
+  color highlights in the chord notation
+- **Pinch-to-zoom on iPad** — viewport meta is swapped in/out so the
+  chord page can zoom while the rest of the app stays locked to 1.0
+- **Cache-first instant render** — the moment you tap a row, the store
+  kicks off `new Image()` *before* Fullscreen even mounts. When the SW
+  has the bytes, the image paints with zero white-flash
+- **Blob bypass** — Fullscreen also reads the Cache Storage directly via
+  `cache.match` → `URL.createObjectURL`, dodging the 200–2000 ms cold SW
+  lookup on idle iPad PWAs
+- **Loading spinner** appears only on genuinely slow loads (150 ms CSS
+  delay; cache hits never paint it), inside a dark pill so it's
+  visible on both white and inverted backgrounds
+- **Error overlay** when an image fails — different copy + icon for
+  "ออฟไลน์ ยังไม่ได้บันทึก" vs "โหลดไม่สำเร็จ"; "ลองอีกครั้ง" button forces a
+  fresh fetch by remounting the `<img>`; auto-retries when `navigator.onLine`
+  flips back to true
+- **Esc to close** on keyboard; tap the dark gutter on touch
+
+### Library & playlists
+- **Favorites** (★) — toggle from any row or in the dedicated tab
+- **Latest** — auto-tracked, FIFO, capped at 30 entries to keep the
+  per-user Firestore doc bounded
+- **Multiple playlists** — create / rename / delete; drag-and-drop
+  reorder (`@dnd-kit`) when viewing your own list
+- **Per-client playlists in a shared room** — every member's lists are
+  merged into one picker, **owner-first**, then yours, then everyone
+  else's by `clientId`. Duplicate names get `(2)/(3)/…` suffixes.
+  Read-only badge on lists you don't own; edit affordances are hidden
+- All collections persist locally in IndexedDB (`idb-keyval`)
+
+### Realtime room sync (Firebase RTDB)
+- **6-digit room codes** — tap to edit, or hit the refresh icon to
+  randomize. Same code on multiple devices = same room
+- **Shared "now playing"** — when one device taps a song, every other
+  device in the room sees it via the `NowPlaying` banner ("คุณเลือก" /
+  "เลือกจากผู้เล่นคนอื่น")
+- **Auto-open fullscreen** on remote picks (toggle eye-icon in TopBar);
+  the picker's close also closes receivers who are still viewing the
+  same song. Page-load baseline guard: songs already in the room when
+  this tab opened don't auto-pop fullscreen — only post-mount picks do
+- **OS push notifications** — asymmetric policy: `autoOpen=on` notifies
+  only when tab is hidden; `autoOpen=off` notifies every time
+- **Deep-linkable URLs** — `/{room}` or `/{room}/{songId}` is the source
+  of truth; sharing a song-URL drops the recipient straight into the
+  fullscreen view. Back/forward buttons walk through prior rooms/songs
+- **Atomic ownership** — first device into a fresh room claims it via
+  RTDB transaction; on owner disconnect the pointer clears and guests
+  race to re-claim. Releasing owner doesn't wipe `/current` or anyone
+  else's `/playlists/{cid}` — those keep going
+
+### Cross-device sync (Firestore)
+- A random 8-char `clientId` (persisted in localStorage) keys a
+  Firestore doc at `clients/{clientId}`. Mirror `favorites`, `latest`,
+  `roomCode` across any device that shares the same `clientId`
+- **No Firebase Auth** — open rules on `clients/{clientId}`. Trade-off
+  documented in [src/lib/firebase.ts](src/lib/firebase.ts) and
+  [CLAUDE.md](CLAUDE.md)
+- URL-forced room beats stale cloud value: a shared link always wins
+  over whatever room this device was in last
+
+### Offline
+- **PWA service worker** (custom, `injectManifest` mode) — precaches
+  build assets, falls back navigation to `index.html`, caches
+  `songs.bin` stale-while-revalidate, and chord images cache-first
+  from R2 (~5,000-entry cap, `Vary: Origin` normalized)
+- **Three-layer image strategy**
+  1. SW CacheFirst on every image you view
+  2. Background prefetch ([useAutoPrefetch](src/hooks/useAutoPrefetch.ts))
+     for favorites + latest + every playlist (mine + bandmates') —
+     low-concurrency (4), skips already-cached, silent on failure
+  3. Defensive `ensureCached()` on every Fullscreen onLoad, in case the
+     SW route didn't actually cache the entry (stale SW, pattern miss)
+- **Green offline dot** on each row when its image is in the local cache
+- **`requestPersistentStorage()`** at app mount so the cache survives
+  disk pressure on iOS
+- Notification deep-link via SW `notificationclick` → focus existing
+  tab + navigate, or `openWindow` to the song URL
+
+### Install / share
+- **Install button** (TopBar) — Chrome / Edge / Android fire the native
+  `beforeinstallprompt`; iPad / iPhone Safari get an instruction sheet
+  ("Share → Add to Home Screen") portaled to `document.body` to escape
+  the header's `backdrop-filter` containing block
+- Hidden entirely once running as an installed PWA
+- **Share button** — `navigator.share` with clipboard fallback; flashes
+  ✓ when the link is on the clipboard
+
+### Misc UX
+- **Auto-open eye toggle** — explicit control over whether remote picks
+  take over your screen
+- **Owner / Guest badge** on the room code chip
+- **Click-outside to cancel** the room-code edit input
+- All collections survive tab close + page reload (idb-keyval +
+  localStorage)
 
 ## Stack
 
@@ -144,7 +242,9 @@ F:\chord\
 │   ├── upload_r2.py                 # bulk upload to R2 (resumable)
 │   ├── scan_weird_chars.py          # spot invisible control chars in titles
 │   ├── build-data.mjs               # results.json → public/songs.bin
-│   └── pipeline.ps1                 # one-shot: upload + build + push
+│   ├── check_sync.py                # cross-check results.json ↔ images/ ↔ R2
+│   ├── sync.py                      # one-stop pipeline (probe→scrape→…→push)
+│   └── pipeline.ps1                 # legacy: upload + build + push only
 ├── .env.example, .env.local (gitignored)
 └── CLAUDE.md, DEPLOY.md, README.md
 ```
@@ -165,29 +265,55 @@ See `DEPLOY.md` for the click-by-click setup.
 
 ## Adding new songs
 
-Full pipeline, each step resumable:
+The one-stop pipeline auto-detects the next scrape id from
+`data/results.json`, probes the source forward until 10 consecutive
+misses, then orchestrates scrape → download → sync-names → convert →
+upload → verify → build:
 
 ```powershell
-py scripts\scrape.py --start 70570 --end 75000
-py scripts\download.py
-py scripts\sync_names.py            # PNG stage only — rectify alt ↔ filename
-py scripts\convert_to_webp.py       # in-place PNG → WebP, deletes source PNG
-scripts\pipeline.ps1 -Message "data: add songs 70570..75000"
+npm run sync          # full pipeline, no git push
+npm run sync:push     # same, then git add/commit/push public/songs.bin
+npm run sync:dry      # print every step's command without running
 ```
 
-`pipeline.ps1` runs: `upload_r2.py` → `npm run data` (rebuild
-`public/songs.bin`) → `git commit && git push`. Cloudflare Pages
-auto-deploys within ~60 s.
+Cloudflare Pages auto-deploys within ~60 s of the push.
 
-R2 credentials live in `.env.local`:
+Cross-check that everything is in sync without changing anything:
+
+```powershell
+npm run check         # results.json ↔ images/ ↔ R2 bucket
+npm run check:clean   # also delete orphan WebPs (asks confirmation)
+```
+
+R2 credentials live in `.env.local` — Python scripts auto-load them via
+`scripts/_env.py`, no need to re-export `$env:R2_*` every shell session:
 
 ```
 R2_ACCESS_KEY=...
 R2_SECRET_KEY=...
 ```
 
-Python scripts auto-load these via `scripts/_env.py` — no need to
-re-export `$env:R2_*` every shell session.
+The legacy `scripts/pipeline.ps1` (upload + build + push only) is kept
+for back-compat but `sync.py` supersedes it for the full flow.
+
+### Doing the steps manually
+
+If you'd rather drive each script yourself (e.g. partial reruns after a
+crash), each step is resumable:
+
+```powershell
+py scripts\scrape.py --start 70570 --end 75000
+py scripts\download.py
+py scripts\sync_names.py            # PNG stage only — rectify alt ↔ filename
+py scripts\convert_to_webp.py       # in-place PNG → WebP, deletes source PNG
+py scripts\upload_r2.py images\
+py scripts\check_sync.py
+node scripts\build-data.mjs
+```
+
+Running `sync_names.py` *after* `convert_to_webp.py` will report 70k
+"missing" files because it only knows about `.png` — keep them in this
+order.
 
 ## Install on iPad
 
