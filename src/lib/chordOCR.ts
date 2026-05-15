@@ -29,7 +29,7 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 12;
+const OCR_VERSION = 13;
 const CACHE_PREFIX = "chordroom/ocr/v" + OCR_VERSION + "/";
 
 // Tesseract has a habit of reading "0" for "O", "1" for "I", "S" for "5",
@@ -55,17 +55,16 @@ const NORMALIZE_MAP: Record<string, string> = {
 const CHORD_CHARSET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz°#♯b♭/0123456789+-()";
 
-// Confidence floors. The single-letter floor exists because plain "A" or
-// "B" tokens are valid chord names AND valid English filler words ("A
-// road", a "B side"); the chord-line-density gate downstream usually
-// catches the lyric case, so we can keep these tolerant enough that
-// chord letters Tesseract is "fairly sure" about still get through.
-// Section-header rows like "Intro D" / "Instru D / A / F#m / E" suffer
-// the most from over-aggressive floors: the chord letters there are the
-// same size as in the body but Tesseract often scores them slightly
-// lower (the inline word "Intro" / "Instru" beside them slightly biases
-// the recogniser), and a floor of 55 would silently drop the chord.
-const SINGLE_LETTER_CONFIDENCE_MIN = 40;
+// Single confidence floor for all chord tokens. We previously also had a
+// stricter floor for single-letter tokens ("A" / "B" / "D") because they
+// double as English filler words — but in practice, Tesseract scores
+// single chord letters MUCH lower when they sit next to a slash or
+// section label on Intro/Instru rows than when they appear cleanly on
+// body chord rows. The two-floor scheme silently dropped half the
+// Intro/Instru chord letters. The chord-vocabulary snapper is strict
+// enough on its own (length ≤ 2 demands exact vocabulary match, length
+// 3+ caps edit distance) that we can lean on it to reject lyric noise
+// without a second confidence gate per length tier.
 const MIN_CONFIDENCE_OVERALL = 25;
 
 function normalizeRaw(raw: string): string {
@@ -174,30 +173,9 @@ function eachLine(page: TesseractPage): TesseractLine[] {
   return out;
 }
 
-// A line qualifies as a "chord line" when at least this fraction of its
-// substantive tokens (anything that survives normalisation — i.e. not
-// pure punctuation) snap to a chord in the vocabulary. The threshold is
-// permissive on purpose: header rows like "Intro / Amaj9 / E7 / ( 2
-// Times )" come in with ratio ≈ 0.35 because Tesseract picks up the
-// section label "Intro" plus the "( 2 Times )" annotation alongside the
-// two real chords. Setting the gate at 0.5 (or even 0.4) used to drop
-// the entire row and the user saw black, untransposed chord text where
-// red overlays should have appeared. The bulk-count gate and short-line
-// gate downstream are the other two ways a line can qualify; this is the
-// most-forgiving of the three.
-const CHORD_LINE_RATIO_MIN = 0.3;
-
 interface SnappedChord {
   text: string;
   bbox: { x0: number; y0: number; x1: number; y1: number };
-}
-interface LineToken {
-  word: TesseractWord;
-  normalized: string;
-  // One Tesseract word can yield MULTIPLE chord matches when it turns out
-  // to be two adjacent chords glued together by tight spacing
-  // ("Am7D7"). Empty array = nothing chord-shaped here.
-  chords: SnappedChord[];
 }
 
 // Try to extract one or more chord matches from a single normalised OCR
@@ -211,7 +189,6 @@ function snapWordMaybeGlued(
   bbox: { x0: number; y0: number; x1: number; y1: number },
 ): SnappedChord[] {
   if (confidence < MIN_CONFIDENCE_OVERALL) return [];
-  if (normalized.length === 1 && confidence < SINGLE_LETTER_CONFIDENCE_MIN) return [];
 
   const parts = splitGluedChords(normalized);
   if (parts.length > 1) {
@@ -247,28 +224,20 @@ function snapWordMaybeGlued(
   return whole ? [{ text: whole, bbox }] : [];
 }
 
-// Minimum absolute number of snapped chord tokens for a line to qualify
-// as a chord row even when the ratio gate misses. Some sheets have lines
-// like "Intro / D / G / Em / A /" where Tesseract may also pick up the
-// word "Intro" plus stray noise tokens — the chord-only ratio dips below
-// 0.5, but the line still clearly carries chord positions worth
-// overlaying. Two-or-more snapped tokens is a strong signal that we're
-// looking at chords, not lyrics.
-const CHORD_LINE_MIN_COUNT = 2;
-
-// Even a SINGLE snapped chord on a very short line is almost certainly
-// real — chord sheets often have header rows like "Intro D" or
-// "Outro G" with just one chord. We treat any line with ≤ 4 substantive
-// tokens and ≥ 1 snapped chord as a valid chord row. Long lines aren't
-// covered here because a stray chord-shape inside a lyric line is more
-// likely a false positive than music.
-const SHORT_LINE_MAX_SUBSTANTIVE = 4;
-
 function extractChordsFromLine(
   line: TesseractLine,
   bboxScale: number,
 ): ChordToken[] {
-  const tokens: LineToken[] = [];
+  // Per-line classification has been removed. The previous gate (chord-
+  // density ratio + bulk count + short-line) was supposed to keep tuning
+  // hints like "Tune down ½ tone to Eb" from leaking the Eb in as a chord,
+  // but it ALSO rejected Intro / Instru rows whenever Tesseract decided
+  // to lump the section label, the slashes and the chord letters together
+  // into one structural "line" — exactly the rows the user kept seeing
+  // un-transposed. The vocabulary snapper is strict enough on its own
+  // (length ≤ 2 demands exact match, length 3+ caps edit distance) that
+  // it rejects lyric noise without needing a second per-line gate.
+  const out: ChordToken[] = [];
   for (const word of line.words ?? []) {
     const raw = (word.text ?? "").trim();
     if (!raw) continue;
@@ -279,37 +248,12 @@ function extractChordsFromLine(
       word.confidence ?? 0,
       word.bbox,
     );
-    tokens.push({ word, normalized, chords });
-  }
-  if (tokens.length === 0) return [];
-
-  // A word counts as "having a chord" if AT LEAST one snapped chord came
-  // out of it. The split path can produce 2+ chords per word, but for
-  // chord-density classification we still count by source word.
-  const chordWordCount = tokens.reduce(
-    (n, t) => (t.chords.length > 0 ? n + 1 : n),
-    0,
-  );
-  const ratio = chordWordCount / tokens.length;
-  // Three independent ways for a line to qualify as a chord row:
-  //   - density: most substantive tokens snap to chords
-  //   - bulk:    enough snapped chords to be statistically obvious
-  //   - header:  a short line with at least one chord (catches one-chord
-  //              section headers like "Intro D" / "Outro G")
-  const accept =
-    ratio >= CHORD_LINE_RATIO_MIN ||
-    chordWordCount >= CHORD_LINE_MIN_COUNT ||
-    (chordWordCount >= 1 && tokens.length <= SHORT_LINE_MAX_SUBSTANTIVE);
-  if (!accept) return [];
-
-  const out: ChordToken[] = [];
-  for (const t of tokens) {
-    for (const c of t.chords) {
+    for (const c of chords) {
       out.push({
         // Use the snapped canonical name — transposition operates on a
         // clean chord symbol regardless of what Tesseract actually wrote.
         text: c.text,
-        raw: t.word.text,
+        raw: word.text,
         // Bboxes come back from Tesseract in the upscaled-canvas
         // coordinate space (see preprocessForOCR's OCR_UPSCALE). Divide
         // back to the image's natural pixel coordinates here so the
@@ -323,7 +267,7 @@ function extractChordsFromLine(
           x1: c.bbox.x1 / bboxScale,
           y1: c.bbox.y1 / bboxScale,
         },
-        confidence: t.word.confidence,
+        confidence: word.confidence,
       });
     }
   }
