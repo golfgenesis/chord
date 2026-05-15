@@ -16,11 +16,15 @@
   }
   body {
     @apply bg-bg text-ink font-sans antialiased;
-    /* Explicitly allow vertical scrolling. Without this, iOS Safari will
-       occasionally swallow touch-drag on nested scroll containers when an
-       ancestor has `overflow: hidden` + backdrop-filter + safe-area insets,
-       which is exactly our layout. */
-    touch-action: pan-y;
+    /* `pan-y` keeps vertical touch-scroll responsive on iOS Safari (without
+       it, nested scroll containers stop responding inside our overflow-
+       hidden + backdrop-filter + safe-area layout). `pinch-zoom` is added
+       so iOS Safari's native two-finger pinch CAN reach descendants like
+       Fullscreen's chord viewer — `touch-action` cascades by intersection,
+       so `pan-y` alone here disallows pinch on every descendant regardless
+       of their own `touch-action: pinch-zoom` opt-in. The combined value
+       allows both. */
+    /* touch-action: pan-y pinch-zoom; */
     /* Inter alternates that read closer to SF Pro */
     font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
