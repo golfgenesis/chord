@@ -125,6 +125,15 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
     persisted: false,
   });
   const [cachedCount, setCachedCount] = useState<number>(0);
+  // Raw count of entries in the `chord-images` cache — INCLUDING orphans
+  // (entries from earlier app versions whose URLs no longer match any
+  // current song, or stale entries persisting after the song dataset
+  // refreshed). cachedCount only counts entries-matching-current-songs;
+  // we need cachedTotal to keep the "ลบแคช" button reachable when the
+  // catalogue dataset hasn't loaded yet (offline / Safari evicted
+  // songs.bin) — otherwise the user is stuck with bytes occupied and no
+  // way to free them from inside the app.
+  const [cachedTotal, setCachedTotal] = useState<number>(0);
   // Two-step confirmation for the destructive "clear cache" action — one
   // mis-tap shouldn't wipe a 30-minute download.
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -147,6 +156,7 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
         if (cached.has(absoluteImageUrl(song))) count++;
       }
       setCachedCount(count);
+      setCachedTotal(cached.size);
     }
     refresh();
     // Re-poll while a download is in flight so the progress UI's storage
@@ -382,19 +392,29 @@ function OfflineSheet({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {/* Clear-cache zone. Only shown when there's something cached to
-            clear — the button + inline confirm pattern avoids the user
-            wiping a 30-minute download with one tap. */}
-        {cachedCount > 0 && !downloading && (
+        {/* Clear-cache zone. Gated on `cachedTotal` (raw cache entries),
+            NOT `cachedCount` (entries-matching-current-songs). Without
+            this, the button disappears when the catalogue hasn't loaded
+            (offline / Safari evicted songs.bin) or when all entries are
+            orphans from an older song dataset — leaving the user with
+            megabytes of stuck cache and no in-app way to free it. The
+            button + inline confirm pattern still prevents single-tap
+            wipe of a 30-minute download. */}
+        {cachedTotal > 0 && !downloading && (
           <div className="mt-4 border-t border-line/40 pt-4">
             {confirmingClear ? (
               <div className="space-y-2.5">
                 <p className="text-[13px] leading-[1.5] text-ink-dim">
                   ลบรูปที่ดาวน์โหลดไว้ทั้งหมด{" "}
                   <span className="font-semibold text-ink">
-                    {cachedCount.toLocaleString()} เพลง
-                  </span>{" "}
-                  · จะใช้งานออฟไลน์ไม่ได้จนกว่าจะดาวน์โหลดใหม่
+                    {cachedTotal.toLocaleString()} รายการ
+                  </span>
+                  {cachedTotal !== cachedCount && cachedCount > 0 && (
+                    <span className="text-ink-mute">
+                      {" "}(ตรงกับเพลงปัจจุบัน {cachedCount.toLocaleString()})
+                    </span>
+                  )}
+                  {" "}· จะใช้งานออฟไลน์ไม่ได้จนกว่าจะดาวน์โหลดใหม่
                 </p>
                 <div className="flex gap-2">
                   <button
