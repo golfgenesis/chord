@@ -35,6 +35,10 @@ function saveTransposeMap(map: TransposeMap) {
   saveLocal(TRANSPOSE_KEY, map);
 }
 
+// OCR debug-overlay toggle. Persisted globally (not per-song) because it's
+// a developer/diagnostic flag, not a per-song preference.
+const OCR_DEBUG_KEY = "ocr-debug";
+
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
   const close = useApp((s) => s.close);
@@ -79,6 +83,20 @@ export function Fullscreen() {
     ocrState && song && ocrState.songId === song.id ? ocrState : null;
   const currentOcrError =
     ocrError && song && ocrError.songId === song.id ? ocrError : null;
+
+  // OCR debug overlay — when on, ChordOverlay outlines every detected chord
+  // (with its OCR'd text) instead of just rendering transposed replacements.
+  // Persisted to localStorage so the developer can leave it on across reloads.
+  const [ocrDebug, setOcrDebug] = useState<boolean>(() =>
+    loadLocal<boolean>(OCR_DEBUG_KEY, false),
+  );
+  const toggleOcrDebug = useCallback(() => {
+    setOcrDebug((v) => {
+      const next = !v;
+      saveLocal(OCR_DEBUG_KEY, next);
+      return next;
+    });
+  }, []);
 
   // Transposition state. `map` lives in localStorage and survives reloads;
   // `fromKey` / `toKey` are the current song's entry resolved from it. The
@@ -162,7 +180,16 @@ export function Fullscreen() {
     runChordOCR(songSnap.id, imgEl)
       .then((result) => {
         if (cancelled) return;
-        const detectedKey = detectKey(result.chords.map((c) => c.text));
+        // Flatten sequence tokens (section header chord rows where one
+        // OCR'd word holds multiple chord names) so each individual chord
+        // contributes to key detection. Single tokens pass through as-is.
+        const flat: string[] = [];
+        for (const c of result.chords) {
+          if (c.sequence && c.sequence.length > 0) {
+            for (const e of c.sequence) flat.push(e.chord);
+          } else flat.push(c.text);
+        }
+        const detectedKey = detectKey(flat);
         setOcrState({ songId: songSnap.id, result, detectedKey });
         // Auto-fill the From key from the detection, but ONLY if the user
         // hasn't already chosen one for this song. We never overwrite a
@@ -413,11 +440,20 @@ export function Fullscreen() {
             fromKey={fromKey}
             toKey={toKey}
             detectedKey={currentOcr?.detectedKey ?? null}
-            chordCount={currentOcr?.result.chords.length ?? 0}
+            chordCount={
+              currentOcr
+                ? currentOcr.result.chords.reduce(
+                    (n, c) => n + (c.sequence?.length ?? 1),
+                    0,
+                  )
+                : 0
+            }
             transposeActive={transposeActive}
             onChangeFrom={setFrom}
             onChangeTo={setTo}
             onReset={resetTranspose}
+            ocrDebug={ocrDebug}
+            onToggleOcrDebug={toggleOcrDebug}
           />
           <button
             onClick={toggleInvertImages}
@@ -549,16 +585,19 @@ export function Fullscreen() {
             display: errored ? "none" : undefined,
           }}
         />
-        {/* Transposed-chord overlay. Renders only when OCR has finished AND
-            the user has picked a non-identity (From, To). Sits above the
-            image but below the panel + error overlay (which are z-10+). */}
-        {currentOcr && transposeActive && !errored && (
+        {/* Transposed-chord overlay. Renders when OCR has finished AND
+            either (a) the user has picked a non-identity (From, To), or
+            (b) debug mode is on so the user can audit detection coverage.
+            Sits above the image but below the panel + error overlay
+            (which are z-10+). */}
+        {currentOcr && (transposeActive || ocrDebug) && !errored && (
           <ChordOverlay
             result={currentOcr.result}
             imgEl={imgEl}
             fromKey={fromKey}
             toKey={toKey}
             invert={invertImages}
+            debug={ocrDebug}
           />
         )}
       </div>
@@ -616,6 +655,8 @@ function DetectionChip({
   onChangeFrom,
   onChangeTo,
   onReset,
+  ocrDebug,
+  onToggleOcrDebug,
 }: {
   status: "loading" | "ready" | "error";
   fromKey: number;
@@ -626,6 +667,8 @@ function DetectionChip({
   onChangeFrom: (v: number) => void;
   onChangeTo: (v: number) => void;
   onReset: () => void;
+  ocrDebug: boolean;
+  onToggleOcrDebug: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement>(null);
@@ -795,6 +838,32 @@ function DetectionChip({
                 onPick={pickTo}
                 accent="brand"
               />
+
+              {/* Debug toggle — outlines every chord OCR detected, so the
+                  user can audit which chord positions were and weren't
+                  caught (especially the Intro / Instru / Outro section
+                  rows that historically had unreliable detection). Kept
+                  in the popover instead of the main header so it doesn't
+                  clutter the toolbar. */}
+              <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+                <span className="text-[11px] font-medium text-ink-dim">
+                  แสดงคอร์ดที่ตรวจเจอ (debug)
+                </span>
+                <button
+                  onClick={onToggleOcrDebug}
+                  role="switch"
+                  aria-checked={ocrDebug}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
+                    ocrDebug ? "bg-brand" : "bg-white/15"
+                  }`}
+                >
+                  <span
+                    className={`inline-block size-4 transform rounded-full bg-white transition ${
+                      ocrDebug ? "translate-x-[18px]" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
 
               {transposeActive && (
                 <div className="-mb-0.5 flex justify-end border-t border-white/[0.06] pt-2.5">

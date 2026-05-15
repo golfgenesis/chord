@@ -8,6 +8,12 @@ interface Props {
   fromKey: number;
   toKey: number;
   invert: boolean;
+  // When true, draws an outline + label around EVERY detected chord token
+  // (not just transposed ones) so the user can verify what Tesseract
+  // actually read and where it placed each bbox. Useful for debugging
+  // sections that look "untransposed" — if a chord isn't outlined here,
+  // OCR didn't see it; if it IS outlined but the wrong name, snap is off.
+  debug?: boolean;
 }
 
 interface Layout {
@@ -27,7 +33,14 @@ interface Layout {
  * (which is responsible for click-to-close fullscreen). The per-chord boxes
  * also don't intercept clicks for the same reason.
  */
-export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
+export function ChordOverlay({
+  result,
+  imgEl,
+  fromKey,
+  toKey,
+  invert,
+  debug,
+}: Props) {
   const [layout, setLayout] = useState<Layout | null>(null);
 
   // Compute layout (scale + letterbox offsets) whenever the container size
@@ -99,11 +112,91 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
 
   if (!layout) return null;
 
-  const delta = ((toKey - fromKey) % 12 + 12) % 12;
+  const delta = (((toKey - fromKey) % 12) + 12) % 12;
   const signedDelta = delta > 6 ? delta - 12 : delta;
-  if (signedDelta === 0) return null; // no-op transpose — leave original visible
+  // Debug mode bypasses the early-out: even with no transposition we still
+  // want to draw outlines around every detected chord so the user can verify
+  // OCR coverage. Production mode preserves the original fast path.
+  if (signedDelta === 0 && !debug) return null;
 
   const preferFlats = preferFlatsForKey(toKey);
+
+  if (debug) {
+    return (
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        {result.chords.map((chord, i) => {
+          const left = layout.offsetX + chord.bbox.x0 * layout.scale;
+          const top = layout.offsetY + chord.bbox.y0 * layout.scale;
+          const width = (chord.bbox.x1 - chord.bbox.x0) * layout.scale;
+          const height = (chord.bbox.y1 - chord.bbox.y0) * layout.scale;
+          const isSequence =
+            !!chord.sequence && chord.sequence.length >= 2;
+          const original = isSequence
+            ? chord.sequence!.map((e) => e.pre + e.chord).join("")
+            : chord.text;
+          const newName =
+            signedDelta !== 0
+              ? isSequence
+                ? chord
+                    .sequence!.map(
+                      (e) =>
+                        e.pre + transposeChord(e.chord, signedDelta, preferFlats),
+                    )
+                    .join("")
+                : transposeChord(chord.text, signedDelta, preferFlats)
+              : original;
+          const changed = newName !== original;
+          // Cyan outline for "detected, name unchanged" (or no transpose
+          // active); magenta for "detected and would be transposed".
+          // Sequence tokens get an amber outline so they stand out from
+          // single chords during debugging — they span a much wider bbox
+          // and the user usually wants to verify the boundary. Both are
+          // outline-only so the original printed text stays visible.
+          const color = isSequence
+            ? "#f59e0b"
+            : changed
+              ? "#ec4899"
+              : "#06b6d4";
+          const label = changed ? `${original}→${newName}` : original;
+          return (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                left,
+                top,
+                width,
+                height,
+                outline: `1.5px solid ${color}`,
+                outlineOffset: 1,
+                boxSizing: "border-box",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: -14,
+                  background: color,
+                  color: "#fff",
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  lineHeight: "12px",
+                  padding: "1px 3px",
+                  borderRadius: 2,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
   // Background covers the original chord (white on a normal sheet, black
   // in invert mode); foreground is a vivid red instead of matching ink so
   // the user can tell at a glance which chord positions actually got
@@ -114,13 +207,28 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
   const boxFg = invert ? "#fca5a5" : "#dc2626";
 
   return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0"
-    >
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0">
       {result.chords.map((chord, i) => {
-        const newName = transposeChord(chord.text, signedDelta, preferFlats);
-        if (newName === chord.text) return null; // nothing to change
+        // Sequence tokens (section header chord rows) carry an ordered
+        // array of {chord, pre} entries with the original separators
+        // preserved ("/" for measure boundaries, " " for adjacent
+        // chords sharing a measure). Transpose each chord, rejoin with
+        // the SAME separators, and render as ONE label sized to fit
+        // the source bbox width. The bbox is already sliced upstream
+        // to exclude any section label prefix so "Intro" stays visible.
+        const isSequence = !!chord.sequence && chord.sequence.length >= 2;
+        const newName = isSequence
+          ? chord
+              .sequence!.map(
+                (e) =>
+                  e.pre + transposeChord(e.chord, signedDelta, preferFlats),
+              )
+              .join("")
+          : transposeChord(chord.text, signedDelta, preferFlats);
+        const original = isSequence
+          ? chord.sequence!.map((e) => e.pre + e.chord).join("")
+          : chord.text;
+        if (newName === original) return null; // nothing to change
 
         const left = layout.offsetX + chord.bbox.x0 * layout.scale;
         const top = layout.offsetY + chord.bbox.y0 * layout.scale;
@@ -133,9 +241,29 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
         // Vertical pad is larger than horizontal because chord labels like
         // "F#" / "Bm7" have descenders/ascenders that fall outside the
         // measured bbox.
-        const padX = Math.max(2, Math.floor(height * 0.18));
-        const padY = Math.max(2, Math.floor(height * 0.35));
+        const padX = Math.max(2, Math.floor(height * 0));
+        const padY = Math.max(2, Math.floor(height * 0));
         const pad = padX; // back-compat name used below for padding shorthand
+
+        // Font size is capped by both vertical fit (height × 1.2, matches
+        // the original printed glyph size) AND horizontal fit (slice width
+        // ÷ new chord-name length). The width cap prevents long
+        // transpositions ("C" → "F#m") and tight section-header chord
+        // rows (where Tesseract glues "IntroC#/F#mE/DE/..." into one
+        // token and each chord's bbox is sliced to a sliver — char-
+        // proportional slicing) from overflowing and stacking labels on
+        // top of each other. Allow the label to extend up to ~1.2× the
+        // bbox width so a single-char "C" → "F#m" still grows a little,
+        // but can't drift across an adjacent chord on dense rows.
+        //
+        // 0.62 ≈ average monospace ch-width / em — tighter than
+        // proportional fonts but loose enough that bolds still fit.
+        const CHAR_W_RATIO = 0.62;
+        const heightCap = height * 1.2;
+        const widthBudget = (width + padX * 2) * 1.2;
+        const widthCap =
+          widthBudget / Math.max(1, newName.length * CHAR_W_RATIO);
+        const fontSize = Math.max(10, Math.min(heightCap, widthCap));
 
         // Allow horizontal overflow so longer chord names ("C" → "F#") stay
         // readable. minWidth keeps the cover-up rectangle at least as wide
@@ -155,13 +283,7 @@ export function ChordOverlay({ result, imgEl, fromKey, toKey, invert }: Props) {
               fontFamily:
                 "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
               fontWeight: 700,
-              // Tesseract's bbox hugs the glyph ink (cap height roughly),
-              // which is ~70% of an equivalent CSS font-size. Multiplying
-              // by ~1.4 reverses that ratio so the replacement chord
-              // renders at the same VISUAL size as the original printed
-              // text instead of the noticeably-smaller cap-height-as-
-              // font-size that we used to ship.
-              fontSize: Math.max(11, height * 1.55),
+              fontSize,
               lineHeight: `${height + padY * 2}px`,
               whiteSpace: "nowrap",
               boxSizing: "border-box",

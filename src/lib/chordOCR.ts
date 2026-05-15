@@ -12,11 +12,36 @@
 import { get as idbGet, set as idbSet } from "idb-keyval";
 import { snapChord } from "./chordVocab";
 
+export interface SequenceEntry {
+  chord: string;
+  /**
+   * Separator characters rendered BEFORE this chord. "" for the first
+   * entry; " / " for measure separators; " " for adjacent chords that
+   * share a measure ("G A" — two chords in one bar, no slash between
+   * them on the printed page). Preserved from the original OCR token
+   * so the rendered label keeps the measure structure of the source.
+   */
+  pre: string;
+}
+
 export interface ChordToken {
   text: string;     // Normalized chord symbol (e.g. "Am7", "F#", "Bb")
   raw: string;      // Original OCR text before normalization
   bbox: { x0: number; y0: number; x1: number; y1: number };
   confidence: number; // 0..100 — Tesseract's per-word confidence
+  /**
+   * If set, this token represents a slash-separated chord SEQUENCE — a
+   * section header chord row like "Intro / Bm / G / A / F#m" that
+   * Tesseract glued into a single OCR word. Each entry carries the
+   * chord name plus the separator that precedes it ("/" vs " ") so
+   * adjacent chords sharing a measure ("G A") render adjacent instead
+   * of getting a spurious "/" inserted between them. The bbox is
+   * sliced to start AFTER any section label prefix (so "Intro" stays
+   * visible) and end at the last chord. Downstream code that cares
+   * about per-chord pitch (detectKey, chord counts) should iterate
+   * `sequence` and use each entry's `chord`.
+   */
+  sequence?: SequenceEntry[];
 }
 
 export interface OCRResult {
@@ -29,7 +54,7 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 15;
+const OCR_VERSION = 17;
 
 // Section-header labels that Tesseract occasionally glues onto the adjacent
 // chord token when kerning is tight ("Intro" + "D" → "IntroD", "BridgeD/G/Em",
@@ -40,6 +65,18 @@ const OCR_VERSION = 15;
 // happen to contain a chord-shaped substring don't slip through.
 const SECTION_PREFIX_RE =
   /^(intro|verse|chorus|prechorus|bridge|outro|ending|coda|solo|interlude|instru|instrumental|hook|tag|riff)/i;
+
+// Same labels but as a word boundary scan — used to detect a whole LINE
+// as a "section header chord row" (the Intro / Bm / G / A / … pattern).
+// Tesseract scores individual chord glyphs on those short isolated rows
+// MUCH lower than on body chord rows (no surrounding lyric context to
+// boost recogniser confidence), so the normal MIN_CONFIDENCE_OVERALL floor
+// silently drops them. On rows that pass this test we drop the floor to 0
+// and lean on the vocab-snap (length ≤ 2 demands exact match, length 3+
+// caps edit distance) — the "section label + many slashes" signature is
+// specific enough that lyric lines never trigger it.
+const SECTION_LINE_RE =
+  /(?:^|[\s/(])(intro|verse|chorus|prechorus|bridge|outro|ending|coda|solo|interlude|instru|instrumental|hook|tag|riff)(?=[\s/)]|$)/i;
 const CACHE_PREFIX = "chordroom/ocr/v" + OCR_VERSION + "/";
 
 // Tesseract has a habit of reading "0" for "O", "1" for "I", "S" for "5",
@@ -231,6 +268,8 @@ function eachLine(page: TesseractPage): TesseractLine[] {
 interface SnappedChord {
   text: string;
   bbox: { x0: number; y0: number; x1: number; y1: number };
+  /** Set when this token represents a glued multi-chord sequence (see ChordToken.sequence). */
+  sequence?: SequenceEntry[];
 }
 
 // Try to extract one or more chord matches from a single normalised OCR
@@ -243,8 +282,9 @@ function snapWordMaybeGlued(
   normalized: string,
   confidence: number,
   bbox: { x0: number; y0: number; x1: number; y1: number },
+  minConfidence: number = MIN_CONFIDENCE_OVERALL,
 ): SnappedChord[] {
-  if (confidence < MIN_CONFIDENCE_OVERALL) return [];
+  if (confidence < minConfidence) return [];
 
   const spans = findChordSpans(normalized);
   const snaps = spans.map((s) => snapChord(s.text));
@@ -266,7 +306,47 @@ function snapWordMaybeGlued(
   // both land here; the bbox slice degenerates to the full bbox when the
   // span already covers the whole token.
   if (spans.length > 0 && snaps.every((s): s is string => s !== null)) {
-    return spans.map((s, i) => slice(s, snaps[i]!));
+    const validSnaps = snaps as string[];
+    // Glued slash-separated SEQUENCE (e.g. Tesseract reads "Intro / Bm /
+    // G / A / F#m / G A / D" as a single word "IntroBm/G/A/F#m/GA/D"
+    // because of tight kerning). Char-index slicing of the source bbox
+    // positions chords approximately, not accurately — and obliterates
+    // the section label and same-measure adjacency. Instead, emit ONE
+    // token that:
+    //   - bbox: sliced to start at the first chord (excluding any
+    //     "Intro" / "Instru" prefix so the keyword stays visible) and
+    //     end at the last chord (so trailing punctuation isn't covered)
+    //   - sequence: [{chord, pre}, …] preserving the original
+    //     separators ("/" vs adjacency) so "GA" stays a single-measure
+    //     pair " G A " instead of getting a spurious "/" inserted.
+    //
+    // ≥2 slashes distinguishes a sequence from a single slash-chord
+    // ("G/B" is one chord with bass B, not two chords).
+    const slashCount = (normalized.match(/\//g) ?? []).length;
+    if (slashCount >= 2 && validSnaps.length >= 2) {
+      const totalLen = normalized.length;
+      const widthFull = bbox.x1 - bbox.x0;
+      const firstSpan = spans[0];
+      const lastSpan = spans[spans.length - 1];
+      const seqBbox = {
+        x0: bbox.x0 + widthFull * (firstSpan.startIdx / totalLen),
+        y0: bbox.y0,
+        x1: bbox.x0 + widthFull * (lastSpan.endIdx / totalLen),
+        y1: bbox.y1,
+      };
+      const entries: SequenceEntry[] = validSnaps.map((chord, k) => {
+        if (k === 0) return { chord, pre: "" };
+        // Look at the characters in the source token between the
+        // previous span and this one. If any "/" appears, it's a
+        // measure separator; otherwise the chords were adjacent on
+        // the printed page (same measure).
+        const gap = normalized.slice(spans[k - 1].endIdx, spans[k].startIdx);
+        return { chord, pre: gap.includes("/") ? " / " : " " };
+      });
+      const displayText = entries.map((e) => e.pre + e.chord).join("");
+      return [{ text: displayText, bbox: seqBbox, sequence: entries }];
+    }
+    return spans.map((s, i) => slice(s, validSnaps[i]));
   }
 
   // Partial snap. Common pattern: Tesseract glued a section header onto
@@ -295,19 +375,52 @@ function snapWordMaybeGlued(
   return whole ? [{ text: whole, bbox }] : [];
 }
 
+/**
+ * Returns true when the line looks like a chord-only row that should use
+ * a relaxed confidence floor. Two patterns count:
+ *
+ *  1. **Section header row** — opens with Intro / Instru / Outro /
+ *     Bridge / Chorus / Verse / … keyword AND has ≥2 slashes
+ *     ("Intro / Bm / G / A / F#m / G / Em").
+ *
+ *  2. **Continuation row** — no section keyword, but ≥3 slashes. Multi-
+ *     line Intro / Instru / Outro sections often span 2–4 lines where
+ *     only the first carries the keyword; subsequent lines look like
+ *     "/ Bm / Bm / Bm / Bm /" or "/ G A / Bm / Bm / ( 2 times )". Lyric
+ *     rows almost never carry that many "/" — section continuation rows
+ *     do. The vocab snapper downstream still rejects noise tokens.
+ *
+ * Tesseract reads isolated chord letters on these short, lyric-less rows
+ * with very low confidence (no surrounding lyric ink to anchor against),
+ * so the normal floor of 25 silently drops most of them. Relaxing to 0
+ * here lets the vocab-snap (which demands an exact match for tokens
+ * ≤ 2 chars and a tight edit distance for 3+) be the sole gate.
+ */
+function isSectionChordRow(line: TesseractLine): boolean {
+  let text = "";
+  let slashCount = 0;
+  for (const w of line.words ?? []) {
+    const t = w.text ?? "";
+    text += t + " ";
+    slashCount += (t.match(/\//g) ?? []).length;
+  }
+  if (slashCount < 2) return false;
+  if (SECTION_LINE_RE.test(text)) return true;
+  return slashCount >= 3;
+}
+
 function extractChordsFromLine(
   line: TesseractLine,
   bboxScale: number,
 ): ChordToken[] {
-  // Per-line classification has been removed. The previous gate (chord-
-  // density ratio + bulk count + short-line) was supposed to keep tuning
-  // hints like "Tune down ½ tone to Eb" from leaking the Eb in as a chord,
-  // but it ALSO rejected Intro / Instru rows whenever Tesseract decided
-  // to lump the section label, the slashes and the chord letters together
-  // into one structural "line" — exactly the rows the user kept seeing
-  // un-transposed. The vocabulary snapper is strict enough on its own
-  // (length ≤ 2 demands exact match, length 3+ caps edit distance) that
-  // it rejects lyric noise without needing a second per-line gate.
+  // Per-line classification has been removed for body rows — the vocabulary
+  // snapper is strict enough on its own (length ≤ 2 demands exact match,
+  // length 3+ caps edit distance) that it rejects lyric noise without
+  // needing a second per-line gate. We keep ONE special case: section
+  // header chord rows ("Intro / Bm / G / A / …") get a relaxed confidence
+  // floor because Tesseract scores their isolated chord glyphs much lower
+  // than body chord rows. See [isSectionChordRow] for the detection.
+  const minConfidence = isSectionChordRow(line) ? 0 : MIN_CONFIDENCE_OVERALL;
   const out: ChordToken[] = [];
   for (const word of line.words ?? []) {
     const raw = (word.text ?? "").trim();
@@ -318,6 +431,7 @@ function extractChordsFromLine(
       normalized,
       word.confidence ?? 0,
       word.bbox,
+      minConfidence,
     );
     for (const c of chords) {
       out.push({
@@ -339,6 +453,7 @@ function extractChordsFromLine(
           y1: c.bbox.y1 / bboxScale,
         },
         confidence: word.confidence,
+        sequence: c.sequence,
       });
     }
   }
