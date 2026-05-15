@@ -112,4 +112,19 @@
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
+  /* Delayed appearance for the Fullscreen loading spinner. Pure CSS so
+     cache-hit loads (which reach `loaded=true` in well under 150 ms)
+     never paint the spinner — it stays invisible until the keyframe
+     flips opacity to 1 at the end of the 150 ms hold. Animation, not
+     transition, because the element mounts each load — there's no
+     prior state for a transition to interpolate from. */
+  .spinner-delayed {
+    opacity: 0;
+    animation: spinner-delayed-appear 1ms linear 150ms forwards;
+  }
+  @keyframes spinner-delayed-appear {
+    to {
+      opacity: 1;
+    }
+  }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { imageUrl } from "../lib/imageUrl";
 import { ensureCached, notifyCacheChanged } from "../lib/offlineDownload";
@@ -12,6 +12,49 @@ export function Fullscreen() {
   // automatically resets to false when `song.id` changes — no effect needed.
   const [loadedId, setLoadedId] = useState<number | null>(null);
   const loaded = song != null && loadedId === song.id;
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  // Loading spinner is delayed by the `.spinner-delayed` keyframe in
+  // [src/index.css](../index.css) (150 ms hold, then opacity → 1). Cache
+  // hits unmount the spinner before its keyframe fires, so no spinner
+  // paints for cached loads. No JS state / effect needed.
+
+  // The "image done" path. Called from <img onLoad> AND from the ref
+  // callback below — the latter catches cache-instant hits where the
+  // browser served the bytes synchronously (memory cache) and `complete`
+  // is already true the moment the ref attaches. Without that, the very
+  // first `<img>` render would still wait for an onLoad tick, giving a
+  // perceptible white flash on every fullscreen open even when cached.
+  const markLoaded = useCallback(
+    (id: number) => {
+      setLoadedId(id);
+      if (song?.id === id) {
+        ensureCached(song).then((ok) => {
+          if (ok) notifyCacheChanged();
+        });
+      }
+    },
+    [song],
+  );
+
+  // Ref callback (NOT an effect — safe to call setState here, runs after
+  // layout, before paint). On mount or src change, if the image is already
+  // complete from cache, mark loaded right away. Idempotent: setLoadedId
+  // with the same value bails inside React.
+  const handleImgRef = useCallback(
+    (el: HTMLImageElement | null) => {
+      imgRef.current = el;
+      if (
+        el &&
+        song &&
+        el.complete &&
+        el.naturalWidth > 0 &&
+        loadedId !== song.id
+      ) {
+        markLoaded(song.id);
+      }
+    },
+    [song, loadedId, markLoaded],
+  );
 
   useEffect(() => {
     if (!song) return;
@@ -109,12 +152,19 @@ export function Fullscreen() {
         onClick={close}
       >
         {!loaded && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2.5 text-white/70">
+          // Delayed via CSS animation rather than a setTimeout-driven state
+          // — cache hits reach `loaded=true` before the 150 ms delay
+          // elapses, so the spinner never paints. Slow loads cross the
+          // threshold and fade in. Pure CSS, no extra state / re-renders.
+          <div
+            className="spinner-delayed pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2.5 text-white/70"
+          >
             <Spinner />
             <span className="text-[13px] font-medium">กำลังโหลด...</span>
           </div>
         )}
         <img
+          ref={handleImgRef}
           src={imageUrl(song)}
           alt={song.name}
           // VITE_IMAGE_BASE points at the R2 Custom Domain whose
@@ -138,9 +188,17 @@ export function Fullscreen() {
           onClick={(e) => e.stopPropagation()}
           draggable={false}
           decoding="async"
-          className={`block h-full w-full select-none object-contain transition-opacity duration-300 ${
-            loaded ? "opacity-100" : "opacity-0"
-          }`}
+          // No opacity hide / transition. The previous opacity-0 →
+          // opacity-100 / 300 ms fade made every cached open feel like a
+          // network load: the bytes were ready in ~30 ms but the user
+          // saw 300 ms+ of white-with-fading-image. Browsers handle the
+          // visual transition natively — they keep the previously-painted
+          // contents until the new image is decoded, so removing the
+          // forced opacity flip eliminates the white flash for cache hits
+          // and doesn't introduce any "half-decoded image" flicker for
+          // network loads (WebP at our quality is decoded all-at-once,
+          // not progressively).
+          className="block h-full w-full select-none object-contain"
           style={{
             // Plain invert — flips white paper → black + black ink → white.
             // No contrast/hue-rotate/saturation tweaks; those over-processed

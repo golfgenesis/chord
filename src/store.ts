@@ -4,6 +4,32 @@ import type { Playlist, RoomState, Song, Tab } from "./types";
 import { loadJSON, loadLocal, saveJSON, saveLocal } from "./lib/persist";
 import { buildSearchIndex } from "./lib/search";
 import { decodeSongs } from "./lib/songsCodec";
+import { imageUrl } from "./lib/imageUrl";
+
+/**
+ * Kick off an image fetch the instant the user picks a song — *before*
+ * Fullscreen even mounts. The browser then has the bytes in its
+ * in-memory image cache by the time React renders the `<img>`, so the
+ * `<img>` element resolves synchronously (img.complete = true on first
+ * paint) and Fullscreen's useLayoutEffect can flip `loaded` true with
+ * zero white-flash. Crucially this also primes the SW's chord-images
+ * Cache for any device that hasn't bulk-downloaded yet, so the next
+ * open of the same song is offline-ready.
+ *
+ * `new Image()` is the canonical lightweight prefetch: it does NOT block
+ * the main thread, fires onload/onerror like a normal img, and shares
+ * the browser's normal image cache with the eventual `<img>` render.
+ */
+function preloadSongImage(song: Song): void {
+  if (typeof Image === "undefined") return;
+  const img = new Image();
+  // Same crossOrigin as Fullscreen's <img> — without this the prefetched
+  // response is an opaque "no-cors" entry that the real CORS <img> can't
+  // share, costing us a second network round-trip.
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = imageUrl(song);
+}
 // Firebase + cloudSync are heavy (~300 KB of the Firebase SDK). We import
 // them dynamically so they end up in their own chunk and load in parallel
 // with songs.json — the search UI never blocks on them.
@@ -325,7 +351,10 @@ export const useApp = create<State>((set, get) => {
         set({ viewing: null });
       } else if (parsed.songId !== null && (!cur || cur.id !== parsed.songId)) {
         const song = get().byId.get(parsed.songId);
-        if (song) set({ viewing: song });
+        if (song) {
+          preloadSongImage(song);
+          set({ viewing: song });
+        }
       }
     });
     const invertImages = loadLocal<boolean>("invertImages", false);
@@ -370,7 +399,10 @@ export const useApp = create<State>((set, get) => {
     // (the room owner already broadcast it; we're just deep-linking in).
     if (urlSongId !== null) {
       const song = byId.get(urlSongId);
-      if (song) set({ viewing: song });
+      if (song) {
+        preloadSongImage(song);
+        set({ viewing: song });
+      }
     }
 
     // Wait for the Firebase chunk before wiring up room sync / cloud sync.
@@ -540,6 +572,13 @@ export const useApp = create<State>((set, get) => {
   },
 
   open(song, broadcast = true) {
+    // Prefetch the chord-sheet image BEFORE flipping `viewing`. Fullscreen
+    // mounts on the next React tick; in the gap the browser has already
+    // started (and often finished) the SW/cache lookup, so when the
+    // `<img>` actually renders it resolves synchronously and the user
+    // never sees the blank-white moment that used to bridge "I tapped a
+    // song" and "image appears".
+    preloadSongImage(song);
     set({ viewing: song });
     // Clear the search input on user-initiated opens so closing fullscreen
     // returns to a fresh list. Auto-open from a remote pick keeps the
