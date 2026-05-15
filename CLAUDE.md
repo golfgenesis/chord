@@ -65,6 +65,7 @@ Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `genera
 
 - Chord images are served as WebP directly from R2 (the source set under `images/` is already WebP). The SW runs no image transcoding — earlier versions had a PNG→WebP `cacheWillUpdate` plugin and it was a measurable bottleneck. Don't reintroduce it.
 - **`notificationclick` handler** focuses an existing tab and `client.navigate(data.url)` to the embedded room/song URL, or `clients.openWindow` if nothing is open. Deep-links bandmates straight to the song someone just picked.
+- **Update polling in [src/main.tsx](src/main.tsx)** calls `registration.update()` every 60 s AND on every `visibilitychange → visible`. This exists because Safari (especially iOS-PWA launched from home screen) effectively never auto-checks for a new `sw.js` — Chrome polls on every navigation + every 24 h, Safari just doesn't. Without the polling a deploy never reaches Safari users. Pairs with the `controllerchange` listener in the same file that reloads the page the moment the new SW activates (`skipWaiting` + `clientsClaim` are inside `sw.ts`).
 
 ### Offline image strategy
 
