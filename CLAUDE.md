@@ -63,8 +63,18 @@ When a URL-specified room differs from the cloud-synced one, the URL wins. The `
 
 Custom SW at `src/sw.ts` (vite-plugin-pwa `injectManifest` mode, **not** `generateSW`). Notable behavior:
 
-- Chord images are served as WebP directly from R2 (the source set under `images/` is already WebP). The SW runs no image transcoding — earlier versions had a PNG→WebP `cacheWillUpdate` plugin, but it was the dominant bottleneck during the 70k offline bulk-download. Don't reintroduce it.
+- Chord images are served as WebP directly from R2 (the source set under `images/` is already WebP). The SW runs no image transcoding — earlier versions had a PNG→WebP `cacheWillUpdate` plugin and it was a measurable bottleneck. Don't reintroduce it.
 - **`notificationclick` handler** focuses an existing tab and `client.navigate(data.url)` to the embedded room/song URL, or `clients.openWindow` if nothing is open. Deep-links bandmates straight to the song someone just picked.
+
+### Offline image strategy
+
+The whole-catalogue (70k) bulk download is **gone**. It hit Safari's quota, took hours over flaky mobile networks, and 99% of users never touched 99% of the files. Today's model is layered:
+
+1. **SW CacheFirst on viewing** — every `<img>` the user opens flows through the `chord-images` Cache Storage and is available offline next time.
+2. **Background prefetch of "things that matter"** — [src/hooks/useAutoPrefetch.ts](src/hooks/useAutoPrefetch.ts) gathers favorites + latest + every playlist (mine + bandmates') into a single Set of song ids and hands them to `prefetchSongs` in [src/lib/offlineDownload.ts](src/lib/offlineDownload.ts). A small pool (4 concurrent, 30 s timeout, silent on failure) walks the queue, skipping anything already cached. Fires on every collection change but is cheap because the pool dedupes against the existing cache.
+3. **Defensive single-song top-up** — `ensureCached(song)` (called from Fullscreen onLoad) catches the case where the SW route didn't actually cache the entry (stale SW, pattern mismatch).
+
+`requestPersistentStorage()` is called once at app mount so the cache survives disk pressure. The cache wipe primitive `clearImageCache()` is exported for debug use; no UI surfaces it currently.
 
 ### Notifications
 
@@ -97,7 +107,7 @@ With ACAO + `crossOrigin="anonymous"` on `<img>`, responses are "cors" (not opaq
 
 Dev: set `VITE_IMAGE_BASE` in `.env.local` to the same custom domain prod uses, so dev and prod are byte-identical paths.
 
-The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/convert_to_webp.py` converts in place and deletes the source PNG. `src/sw.ts` no longer transcodes at runtime (the encode step was the dominant bottleneck of the 70k offline bulk download).
+The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/convert_to_webp.py` converts in place and deletes the source PNG. `src/sw.ts` does not transcode at runtime.
 
 ## Scripts layout
 

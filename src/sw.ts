@@ -18,10 +18,10 @@ declare const self: ServiceWorkerGlobalScope & {
 
 // Silence workbox's per-route debug logging. Without this, every cached
 // fetch prints "[workbox] Updating the 'chord-images' cache with a new
-// Response for ..." — fine for one or two requests, but during a 70k
-// offline bulk-download it floods the console with tens of thousands of
-// lines and tanks DevTools performance. Must be set BEFORE any workbox
-// module is imported elsewhere or it's a no-op.
+// Response for ..." — noise during a background-prefetch burst (a few
+// hundred files on first room join) and tanks DevTools performance.
+// Must be set BEFORE any workbox module is imported elsewhere or it's
+// a no-op.
 self.__WB_DISABLE_DEV_LOGS = true;
 
 self.skipWaiting();
@@ -64,11 +64,11 @@ registerRoute(
     cacheName: "chord-images",
     // R2 Custom Domain sends `Vary: Origin`. Two protections layered:
     //   1) cacheKeyWillBeUsed — normalize the storage key to `new
-    //      Request(url)` so SW (live <img> with Origin) and JS bulk
-    //      download (`cache.put(url, res)` with no Origin) hit the SAME
-    //      entry. Without this both paths wrote different keys for the
-    //      same URL → 2× storage, hitting Safari's tight quota at
-    //      ~halfway through a 70k bulk pre-cache.
+    //      Request(url)` so SW (live <img> with Origin) and JS-side
+    //      `cache.put(url, res)` from prefetch / ensureCached (no Origin)
+    //      hit the SAME entry. Without this both paths wrote different
+    //      keys for the same URL → 2× storage and the offline-dot
+    //      disagreed with the actual SW-served bytes.
     //   2) matchOptions.ignoreVary — belt-and-suspenders against any
     //      legacy entries from before #1 that still have an Origin in
     //      their key. Cheap and safe (we serve identical bytes regardless
@@ -80,9 +80,12 @@ registerRoute(
           new Request(request.url),
       },
       new ExpirationPlugin({
-        // Headroom over the 70,107-song dataset so the offline-mode bulk
-        // download doesn't evict its own files as it walks past 10k.
-        maxEntries: 80000,
+        // Generous cap. In normal use the cache holds whatever the user
+        // has opened + their prefetched favorites/playlists/recents —
+        // typically well under 1k entries. The high ceiling is just
+        // insurance against the rare power user with hundreds of saved
+        // songs across rooms.
+        maxEntries: 5000,
         maxAgeSeconds: 60 * 60 * 24 * 365,
       }),
       new CacheableResponsePlugin({ statuses: [0, 200] }),

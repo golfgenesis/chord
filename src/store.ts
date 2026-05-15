@@ -12,9 +12,8 @@ import { imageUrl } from "./lib/imageUrl";
  * in-memory image cache by the time React renders the `<img>`, so the
  * `<img>` element resolves synchronously (img.complete = true on first
  * paint) and Fullscreen's useLayoutEffect can flip `loaded` true with
- * zero white-flash. Crucially this also primes the SW's chord-images
- * Cache for any device that hasn't bulk-downloaded yet, so the next
- * open of the same song is offline-ready.
+ * zero white-flash. Also primes the SW's chord-images Cache, so the
+ * next open of the same song is offline-ready.
  *
  * `new Image()` is the canonical lightweight prefetch: it does NOT block
  * the main thread, fires onload/onerror like a normal img, and shares

@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { useApp } from "./store";
 import { useVisibleSongs } from "./hooks/useVisibleSongs";
 import { useRoomSongAlert } from "./hooks/useRoomSongAlert";
+import { useAutoPrefetch } from "./hooks/useAutoPrefetch";
+import { requestPersistentStorage } from "./lib/offlineDownload";
 import { TopBar } from "./components/TopBar";
 import { NowPlaying } from "./components/NowPlaying";
 import { Tabs } from "./components/Tabs";
@@ -19,10 +21,16 @@ export default function App() {
 
   useEffect(() => {
     init();
+    // Ask the browser to keep our image cache around when disk pressure
+    // rises. Chrome grants without a gesture; Firefox silently no-ops,
+    // which is fine — eviction just means the next prefetch refills.
+    requestPersistentStorage().catch(() => {});
   }, [init]);
 
   // Auto-open + push notification when a bandmate picks a new song.
   useRoomSongAlert();
+  // Background-cache favorites / latest / playlists for offline use.
+  useAutoPrefetch();
 
   if (!loaded) {
     return (

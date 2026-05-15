@@ -11,8 +11,8 @@ members watching the singer's pick).
 
 - Search across all 70k songs in real time (in-memory linear scan, ~10–30 ms)
 - Tap a song → fullscreen chord image; service worker caches images for
-  offline use; a one-tap "Download all" button pre-caches the entire
-  dataset (~2.5 GB) for travelling-without-Wi-Fi rehearsals
+  offline use; favorites, recents, and every playlist (yours + your
+  bandmates') prefetch in the background so they're ready offline next time
 - **Realtime room sync** via Firebase RTDB: 6-digit room code, when one
   device taps a song the rest see it (with optional auto-open + OS push
   notification, deep-linkable URL `/{room}/{songId}`)
@@ -128,9 +128,10 @@ F:\chord\
 │   ├── types.ts
 │   ├── sw.ts                        # custom service worker
 │   ├── components\                  # TopBar, NowPlaying, Tabs, SongList,
-│   │                                # Fullscreen, PlaylistPicker, OfflineSheet,
+│   │                                # Fullscreen, PlaylistPicker,
 │   │                                # RoomControls
-│   ├── hooks\                       # useVisibleSongs, useRoomSongAlert
+│   ├── hooks\                       # useVisibleSongs, useRoomSongAlert,
+│   │                                # useAutoPrefetch
 │   └── lib\                         # firebase, cloudSync, persist, search,
 │                                    # songsCodec, imageUrl, offlineDownload
 ├── scripts\
@@ -195,7 +196,8 @@ re-export `$env:R2_*` every shell session.
 3. Launch from the icon — fullscreen, dark UI, no Safari chrome.
 
 PWA install also unlocks **persistent storage** on iOS, which is what
-keeps the 70k-image offline cache from being evicted when iOS runs low
+keeps the offline image cache (favorites + playlists + recents,
+prefetched in the background) from being evicted when iOS runs low
 on disk.
 
 ## Data pipeline details

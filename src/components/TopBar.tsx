@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { isInstalledPWA, isIOS } from "../lib/platform";
 import { CheckIcon, ShareIcon, XIcon } from "./icons";
-import { OfflineButton } from "./OfflineSheet";
 
 // Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
 interface BeforeInstallPromptEvent extends Event {
@@ -48,7 +47,6 @@ export function TopBar() {
 
         <div className="flex shrink-0 items-center gap-1.5">
           <InstallButton />
-          <OfflineButton />
           <AutoOpenButton />
           <ShareButton roomCode={roomCode} />
         </div>
