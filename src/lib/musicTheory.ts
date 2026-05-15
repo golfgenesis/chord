@@ -44,6 +44,16 @@ export function preferFlatsForKey(target: Semitone): boolean {
   return PREFER_FLATS_BY_TARGET[((target % 12) + 12) % 12];
 }
 
+// Map a detected tonic+mode to the major-key tonic that shares the same key
+// signature. Em → G, Am → C, Bm → D, … . The key picker UI only exposes the
+// 12 major-key labels, so if detection lands on a minor mode we surface its
+// relative major instead of mislabelling the song (e.g. showing "E" for a
+// song actually in Em).
+export function relativeMajorTonic(tonic: Semitone, mode: "major" | "minor"): Semitone {
+  if (mode === "major") return ((tonic % 12) + 12) % 12;
+  return ((tonic + 3) % 12 + 12) % 12;
+}
+
 export function noteName(semi: Semitone, preferFlats: boolean): string {
   const idx = ((semi % 12) + 12) % 12;
   return preferFlats ? NOTE_NAMES_FLAT[idx] : NOTE_NAMES_SHARP[idx];

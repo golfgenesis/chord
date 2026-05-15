@@ -11,6 +11,7 @@ import { loadLocal, saveLocal } from "../lib/persist";
 import { ChordOverlay } from "./ChordOverlay";
 import { runChordOCR, type OCRResult } from "../lib/chordOCR";
 import { detectKey, type KeyEstimate } from "../lib/keyDetect";
+import { relativeMajorTonic } from "../lib/musicTheory";
 
 // Auto-fill the From key from OCR's key detection only when at least half
 // the detected chords fit the chosen diatonic scale. With the chord-line
@@ -131,9 +132,10 @@ export function Fullscreen() {
     setTransposeMap((prev) => {
       let next: TransposeMap;
       if (detected && detected.confidence >= AUTO_DETECT_CONFIDENCE_MIN) {
+        const defaultTonic = relativeMajorTonic(detected.tonic, detected.mode);
         next = {
           ...prev,
-          [id]: { from: detected.tonic, to: detected.tonic },
+          [id]: { from: defaultTonic, to: defaultTonic },
         };
       } else if (id in prev) {
         next = { ...prev };
@@ -168,11 +170,15 @@ export function Fullscreen() {
         if (detectedKey && detectedKey.confidence >= AUTO_DETECT_CONFIDENCE_MIN) {
           setTransposeMap((prev) => {
             if (prev[String(songSnap.id)]) return prev;
+            const defaultTonic = relativeMajorTonic(
+              detectedKey.tonic,
+              detectedKey.mode,
+            );
             const updated: TransposeMap = {
               ...prev,
               [String(songSnap.id)]: {
-                from: detectedKey.tonic,
-                to: detectedKey.tonic,
+                from: defaultTonic,
+                to: defaultTonic,
               },
             };
             saveTransposeMap(updated);
