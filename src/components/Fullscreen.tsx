@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { imageUrl } from "../lib/imageUrl";
 import {
@@ -6,6 +7,32 @@ import {
   getCachedImageBlobUrl,
   notifyCacheChanged,
 } from "../lib/offlineDownload";
+import { loadLocal, saveLocal } from "../lib/persist";
+import { ChordOverlay } from "./ChordOverlay";
+import { runChordOCR, type OCRResult } from "../lib/chordOCR";
+import { detectKey, type KeyEstimate } from "../lib/keyDetect";
+
+// Auto-fill the From key from OCR's key detection only when at least half
+// the detected chords fit the chosen diatonic scale. With the chord-line
+// gating in [chordOCR.ts](../lib/chordOCR.ts), a fully diatonic chart hits
+// 0.9–1.0; songs that borrow a chord or two come in at 0.7–0.85; anything
+// below 0.5 means the detected list is probably garbage and we shouldn't
+// pretend we know the key.
+const AUTO_DETECT_CONFIDENCE_MIN = 0.5;
+
+// Per-song transpose preferences live as a single localStorage map keyed by
+// songId, so opening a song restores the (from, to) the user last set for it.
+// Identity entries (from === to) aren't stored — wiping back to the default
+// removes the song's key from the map.
+type TransposeMap = Record<string, { from: number; to: number }>;
+
+const TRANSPOSE_KEY = "transpose";
+function loadTransposeMap(): TransposeMap {
+  return loadLocal<TransposeMap>(TRANSPOSE_KEY, {});
+}
+function saveTransposeMap(map: TransposeMap) {
+  saveLocal(TRANSPOSE_KEY, map);
+}
 
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
@@ -33,6 +60,135 @@ export function Fullscreen() {
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
   const imgRef = useRef<HTMLImageElement | null>(null);
+  // State copy of the <img> element. We need it as state (not just a ref)
+  // so ChordOverlay re-renders when the element mounts — refs don't trigger
+  // re-renders on assignment. handleImgRef below keeps both in sync.
+  const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+
+  // OCR state for the song currently being viewed. Derived: a stored
+  // ocrState with a non-matching songId behaves as "not run yet". Switching
+  // songs naturally invalidates without an effect-driven reset.
+  const [ocrState, setOcrState] = useState<{
+    songId: number;
+    result: OCRResult;
+    detectedKey: KeyEstimate | null;
+  } | null>(null);
+  const [ocrError, setOcrError] = useState<{ songId: number } | null>(null);
+  const currentOcr =
+    ocrState && song && ocrState.songId === song.id ? ocrState : null;
+  const currentOcrError =
+    ocrError && song && ocrError.songId === song.id ? ocrError : null;
+
+  // Transposition state. `map` lives in localStorage and survives reloads;
+  // `fromKey` / `toKey` are the current song's entry resolved from it. The
+  // map's structure (one entry per touched song) keeps the storage small —
+  // most users only transpose a handful of songs.
+  const [transposeMap, setTransposeMap] = useState<TransposeMap>(() => loadTransposeMap());
+  const currentEntry = song ? transposeMap[String(song.id)] : undefined;
+  const fromKey = currentEntry?.from ?? 0;
+  const toKey = currentEntry?.to ?? 0;
+  const signedDelta = useMemo(() => {
+    const d = ((toKey - fromKey) % 12 + 12) % 12;
+    return d > 6 ? d - 12 : d;
+  }, [fromKey, toKey]);
+  const transposeActive = signedDelta !== 0;
+
+  // Persist any non-default transpose selection — including identity
+  // (from === to), so an auto-detected key sticks even before the user
+  // picks a target. `resetTranspose` is the only path that deletes the
+  // entry, so the storage map stays bounded to songs the user has
+  // actually engaged with.
+  const updateTranspose = useCallback(
+    (next: { from: number; to: number }) => {
+      if (!song) return;
+      const id = String(song.id);
+      setTransposeMap((prev) => {
+        const updated: TransposeMap = { ...prev, [id]: next };
+        saveTransposeMap(updated);
+        return updated;
+      });
+    },
+    [song],
+  );
+
+  const setFrom = useCallback(
+    (k: number) => updateTranspose({ from: k, to: toKey }),
+    [toKey, updateTranspose],
+  );
+  const setTo = useCallback(
+    (k: number) => updateTranspose({ from: fromKey, to: k }),
+    [fromKey, updateTranspose],
+  );
+  // "Cancel transpose" — snap BOTH from and to back to the auto-detected
+  // source key (so the chip keeps showing the same key the user trusted
+  // for the detection) with delta = 0. Falling back to a hard delete
+  // would reset the chip to C, which feels broken when the page clearly
+  // shows the song is in a different key.
+  const resetTranspose = useCallback(() => {
+    if (!song) return;
+    const id = String(song.id);
+    const detected = currentOcr?.detectedKey;
+    setTransposeMap((prev) => {
+      let next: TransposeMap;
+      if (detected && detected.confidence >= AUTO_DETECT_CONFIDENCE_MIN) {
+        next = {
+          ...prev,
+          [id]: { from: detected.tonic, to: detected.tonic },
+        };
+      } else if (id in prev) {
+        next = { ...prev };
+        delete next[id];
+      } else {
+        return prev;
+      }
+      saveTransposeMap(next);
+      return next;
+    });
+  }, [song, currentOcr]);
+
+  // Kick off OCR lazily when the panel is open and we have a loaded image.
+  // The result is cached in IndexedDB by chordOCR.ts, so subsequent visits
+  // to the same song skip the work. We set state only inside the async
+  // .then callback (mirroring the blob-cache effect above) to stay clear
+  // of the react-hooks/set-state-in-effect rule.
+  useEffect(() => {
+    if (!song || !imgEl || !loaded) return;
+    if (currentOcr) return; // already done for this song
+    if (currentOcrError) return; // failed for this song; don't retry on every render
+    let cancelled = false;
+    const songSnap = song;
+    runChordOCR(songSnap.id, imgEl)
+      .then((result) => {
+        if (cancelled) return;
+        const detectedKey = detectKey(result.chords.map((c) => c.text));
+        setOcrState({ songId: songSnap.id, result, detectedKey });
+        // Auto-fill the From key from the detection, but ONLY if the user
+        // hasn't already chosen one for this song. We never overwrite a
+        // manual pick — the user is always right.
+        if (detectedKey && detectedKey.confidence >= AUTO_DETECT_CONFIDENCE_MIN) {
+          setTransposeMap((prev) => {
+            if (prev[String(songSnap.id)]) return prev;
+            const updated: TransposeMap = {
+              ...prev,
+              [String(songSnap.id)]: {
+                from: detectedKey.tonic,
+                to: detectedKey.tonic,
+              },
+            };
+            saveTransposeMap(updated);
+            return updated;
+          });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("OCR failed:", err);
+        setOcrError({ songId: songSnap.id });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [song, imgEl, loaded, currentOcr, currentOcrError]);
   // Loading spinner is delayed by the `.spinner-delayed` keyframe in
   // [src/index.css](../index.css) (150 ms hold, then opacity → 1). Cache
   // hits unmount the spinner before its keyframe fires, so no spinner
@@ -154,6 +310,11 @@ export function Fullscreen() {
   const handleImgRef = useCallback(
     (el: HTMLImageElement | null) => {
       imgRef.current = el;
+      // ChordOverlay depends on the element identity to wire up its
+      // ResizeObserver, so we mirror the ref into state for it. The setter
+      // runs after layout (inside a ref callback), so it doesn't block
+      // paint.
+      setImgEl(el);
       if (
         el &&
         song &&
@@ -230,6 +391,23 @@ export function Fullscreen() {
         <h2 className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold leading-[1.5] tracking-tight sm:text-[20px] sm:leading-[1.4]">
           {song.name}
         </h2>
+        <DetectionChip
+          status={
+            currentOcrError
+              ? "error"
+              : currentOcr
+              ? "ready"
+              : "loading"
+          }
+          fromKey={fromKey}
+          toKey={toKey}
+          detectedKey={currentOcr?.detectedKey ?? null}
+          chordCount={currentOcr?.result.chords.length ?? 0}
+          transposeActive={transposeActive}
+          onChangeFrom={setFrom}
+          onChangeTo={setTo}
+          onReset={resetTranspose}
+        />
         <button
           onClick={toggleInvertImages}
           className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
@@ -353,8 +531,342 @@ export function Fullscreen() {
             display: errored ? "none" : undefined,
           }}
         />
+        {/* Transposed-chord overlay. Renders only when OCR has finished AND
+            the user has picked a non-identity (From, To). Sits above the
+            image but below the panel + error overlay (which are z-10+). */}
+        {currentOcr && transposeActive && !errored && (
+          <ChordOverlay
+            result={currentOcr.result}
+            imgEl={imgEl}
+            fromKey={fromKey}
+            toKey={toKey}
+            invert={invertImages}
+          />
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+const KEY_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] as const;
+
+const NOTE_SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"] as const;
+const NOTE_FLAT  = ["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"] as const;
+const POPOVER_WIDTH = 296;
+
+// Tier thresholds calibrated against the diatonic-fit confidence scale —
+// see [keyDetect.ts](../lib/keyDetect.ts). A fully diatonic chord chart
+// scores 1.0; one borrowed chord drops it ~one slot; charts where less
+// than half the detected chords fit the chosen scale are "low" and
+// usually mean the OCR found garbage rather than music.
+function confidenceTier(conf: number): "high" | "mid" | "low" {
+  if (conf >= 0.85) return "high";
+  if (conf >= 0.65) return "mid";
+  return "low";
+}
+
+/**
+ * Header-mounted detection chip + popover. The chip itself is a compact
+ * single-line control showing the current source key (and target, when
+ * transposed) plus a small status dot whose colour conveys OCR confidence
+ * at a glance. Tapping the chip opens a small custom popover with the
+ * 12-key target grid; an inline "คีย์เดิม" link toggles the same grid into
+ * source-override mode without leaving the popover.
+ *
+ * The popover is rendered through `createPortal` to `document.body` so
+ * that the header's `backdrop-filter: blur` doesn't establish a containing
+ * block that would clip a `position: fixed` descendant on iOS Safari.
+ * The popover's `left/top` are computed from the chip's
+ * `getBoundingClientRect`, recomputed on resize / scroll so it stays
+ * pinned across viewport changes (pinch-zoom, orientation flips).
+ */
+function DetectionChip({
+  status,
+  fromKey,
+  toKey,
+  detectedKey,
+  chordCount,
+  transposeActive,
+  onChangeFrom,
+  onChangeTo,
+  onReset,
+}: {
+  status: "loading" | "ready" | "error";
+  fromKey: number;
+  toKey: number;
+  detectedKey: KeyEstimate | null;
+  chordCount: number;
+  transposeActive: boolean;
+  onChangeFrom: (v: number) => void;
+  onChangeTo: (v: number) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // Anchor the portal'd popover to the chip's live screen position. Both
+  // resize and capture-phase scroll fire (capture so we catch scrolls in
+  // nested containers, not just window).
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const el = chipRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const leftAlignedToRight = r.right - POPOVER_WIDTH;
+      const clampedLeft = Math.max(12, Math.min(vw - POPOVER_WIDTH - 12, leftAlignedToRight));
+      setPos({ top: r.bottom + 8, left: clampedLeft });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    if (chipRef.current) ro.observe(chipRef.current);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  const isLoading = status === "loading";
+  const isError = status === "error";
+  const conf = detectedKey?.confidence ?? 0;
+  const confPct = Math.round(conf * 100);
+  const tier = confidenceTier(conf);
+  const confLabel =
+    tier === "high" ? "มั่นใจสูง" : tier === "mid" ? "ปานกลาง" : "ต่ำ";
+
+  // Status-dot colour. Emerald/amber/rose read clearly on the glass-strong
+  // header background in both light and dark chord-sheet modes.
+  const dotClass = isError
+    ? "bg-danger"
+    : tier === "high"
+    ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]"
+    : tier === "mid"
+    ? "bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.5)]"
+    : "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.5)]";
+
+  const closePopover = () => setOpen(false);
+  const pickTo = (k: number) => {
+    onChangeTo(k);
+    closePopover();
+  };
+  // Picking a source key NEVER auto-closes — the musician is correcting
+  // OCR's guess and almost certainly wants to pick a target next. Keeping
+  // the popover open removes a frustrating "tap, close, re-open, tap"
+  // dance when the auto-detect was off.
+  const pickFrom = (k: number) => {
+    onChangeFrom(k);
+  };
+  const handleReset = () => {
+    onReset();
+    closePopover();
+  };
+
+  return (
+    <>
+      <button
+        ref={chipRef}
+        onClick={() => !isLoading && setOpen((v) => !v)}
+        disabled={isLoading}
+        aria-label="เลือกคีย์"
+        className={`relative flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-[12.5px] font-semibold tracking-tight shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
+          isLoading
+            ? "cursor-default border-white/10 bg-white/[0.04] text-white/50"
+            : isError
+            ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/15"
+            : transposeActive
+            ? "border-brand/45 bg-brand-soft text-brand hover:bg-brand/20"
+            : "border-white/[0.12] bg-white/[0.06] text-white/90 hover:border-white/20 hover:bg-white/[0.12]"
+        }`}
+      >
+        {isLoading ? (
+          <>
+            <span className="inline-block size-3 animate-spin rounded-full border-2 border-white/30 border-t-white/70" />
+            <span className="hidden sm:inline">วิเคราะห์...</span>
+          </>
+        ) : (
+          <>
+            <span className={`inline-block size-2 rounded-full ${dotClass}`} aria-hidden="true" />
+            <span className="tabular-nums">{NOTE_SHARP[fromKey]}</span>
+            {transposeActive && (
+              <>
+                <span className="opacity-50">→</span>
+                <span className="tabular-nums">{NOTE_SHARP[toKey]}</span>
+              </>
+            )}
+            <ChevronDownIcon flip={open} />
+          </>
+        )}
+      </button>
+
+      {open &&
+        pos &&
+        createPortal(
+          <>
+            {/* Outside-click capture layer. Sits below the popover so taps
+                inside the popover never reach it. */}
+            <div
+              className="fixed inset-0 z-[60]"
+              onClick={closePopover}
+            />
+            <div
+              role="dialog"
+              aria-label="เลือกคีย์"
+              onClick={(e) => e.stopPropagation()}
+              className="fixed z-[61] flex flex-col gap-2.5 rounded-2xl border border-white/10 bg-bg-soft/95 p-3 shadow-2xl backdrop-blur-xl animate-slide-up"
+              style={{
+                top: pos.top,
+                left: pos.left,
+                width: POPOVER_WIDTH,
+              }}
+            >
+              {/* Analysis summary line — visible at the top so the user
+                  always knows how much to trust the auto-detected source.
+                  Errors swap in a redder message + invite manual input. */}
+              {isError ? (
+                <div className="text-[11.5px] leading-snug text-danger/90">
+                  วิเคราะห์รูปไม่สำเร็จ — กรอกคีย์ต้นฉบับเอง
+                </div>
+              ) : (
+                <div className="flex items-baseline justify-between gap-2 text-[11px]">
+                  <span className="text-ink-dim">
+                    วิเคราะห์เจอ{" "}
+                    <span className="font-semibold text-ink">{chordCount}</span>{" "}
+                    คอร์ด
+                  </span>
+                  <span className="flex items-center gap-1.5 font-medium text-ink-dim">
+                    <span className={`inline-block size-1.5 rounded-full ${dotClass}`} aria-hidden="true" />
+                    <span>
+                      {confLabel} · {confPct}%
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {/* SOURCE picker — the musician's manual override for OCR's
+                  guess. Shown above the target picker so it reads as the
+                  starting point of the transposition. Picking here keeps
+                  the popover open; the user almost always follows up with
+                  a target. */}
+              <KeyGrid
+                heading="คีย์ต้นฉบับ"
+                hint={isError ? "ไม่มีการตรวจจับ — เลือกเอง" : "OCR เดาให้แล้ว · กดเพื่อแก้"}
+                value={fromKey}
+                onPick={pickFrom}
+                accent="muted"
+              />
+
+              {/* TARGET picker — the user's "เปลี่ยนเป็นคีย์อะไร" choice.
+                  Picking here applies the transpose and closes the popover. */}
+              <KeyGrid
+                heading="เปลี่ยนเป็น"
+                hint="แตะคีย์ที่ต้องการ"
+                value={toKey}
+                onPick={pickTo}
+                accent="brand"
+              />
+
+              {transposeActive && (
+                <div className="-mb-0.5 flex justify-end border-t border-white/[0.06] pt-2.5">
+                  <button
+                    onClick={handleReset}
+                    className="text-[11px] font-medium text-ink-dim transition hover:text-danger"
+                  >
+                    ยกเลิกการเปลี่ยนคีย์
+                  </button>
+                </div>
+              )}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/**
+ * One row of label/hint + a 6×2 grid of 12 pitch-class buttons. Shared
+ * between the source and target pickers inside the transpose popover —
+ * the only differences are the heading copy, the bound value, and the
+ * accent (target gets the brand gradient on the active tile; source uses
+ * a quieter outlined treatment so it doesn't compete visually with the
+ * primary "เปลี่ยนเป็น" action).
+ */
+function KeyGrid({
+  heading,
+  hint,
+  value,
+  onPick,
+  accent,
+}: {
+  heading: string;
+  hint?: string;
+  value: number;
+  onPick: (k: number) => void;
+  accent: "brand" | "muted";
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+          {heading}
+        </span>
+        {hint && (
+          <span className="text-[10.5px] text-ink-dim/70">{hint}</span>
+        )}
+      </div>
+      <div className="grid grid-cols-6 gap-1">
+        {KEY_VALUES.map((k) => {
+          const active = k === value;
+          const activeClass =
+            accent === "brand"
+              ? "bg-brand-grad text-white shadow-glow-sm ring-1 ring-white/15"
+              : "border border-brand/50 bg-brand-soft text-brand";
+          return (
+            <button
+              key={k}
+              onClick={() => onPick(k)}
+              title={
+                NOTE_FLAT[k] !== NOTE_SHARP[k]
+                  ? `${NOTE_SHARP[k]} / ${NOTE_FLAT[k]}`
+                  : NOTE_SHARP[k]
+              }
+              className={`flex h-9 items-center justify-center rounded-lg text-[13px] font-bold tabular-nums transition active:scale-95 ${
+                active
+                  ? activeClass
+                  : "bg-white/[0.06] text-white/85 hover:bg-white/[0.12]"
+              }`}
+            >
+              {NOTE_SHARP[k]}
+            </button>
+          );
+        })}
       </div>
     </div>
+  );
+}
+
+function ChevronDownIcon({ flip }: { flip?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={`size-3 opacity-70 transition-transform ${flip ? "rotate-180" : ""}`}
+      aria-hidden="true"
+    >
+      <path
+        d="m4 6 4 4 4-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
