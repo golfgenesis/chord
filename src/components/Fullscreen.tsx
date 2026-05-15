@@ -70,6 +70,48 @@ export function Fullscreen() {
   // re-renders on assignment. handleImgRef below keeps both in sync.
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
 
+  // Custom pinch-zoom transform applied to a wrapper around <img> +
+  // ChordOverlay. The viewport-meta `user-scalable=yes` hack works in
+  // mobile Safari browser, but iPad Safari PWAs (launched from the home
+  // screen, display: standalone) lock the viewport at scale=1 and ignore
+  // mid-page meta updates — so the only way to give those users zoom is
+  // to do it ourselves via CSS transform. `animate` is set only for
+  // double-tap snaps; live pinch / pan keeps transition off for instant
+  // tracking. The ref is the source of truth for handlers (they need the
+  // latest values mid-gesture); state drives rendering. `setZoom` writes
+  // both atomically so they never disagree.
+  type ZoomState = {
+    scale: number;
+    tx: number;
+    ty: number;
+    animate: boolean;
+  };
+  const ZOOM_IDENTITY: ZoomState = { scale: 1, tx: 0, ty: 0, animate: false };
+  const [zoom, setZoomState] = useState<ZoomState>(ZOOM_IDENTITY);
+  const zoomRef = useRef<ZoomState>(ZOOM_IDENTITY);
+  const setZoom = useCallback((next: ZoomState) => {
+    zoomRef.current = next;
+    setZoomState(next);
+  }, []);
+  const zoomWrapRef = useRef<HTMLDivElement | null>(null);
+  // Keep zoomRef in sync with rendered state. Touch handlers below read
+  // from the ref to avoid stale-closure issues; this effect makes sure
+  // out-of-band state changes (like the song-switch reset) propagate to
+  // the ref on commit.
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+  // Reset the custom zoom whenever the user switches songs. Done during
+  // render via the "reset state when a prop changes" pattern (React docs)
+  // rather than an effect, so the new <img> never gets a frame of the
+  // previous song's zoom applied to it. The ref-sync effect below will
+  // catch zoomRef up to the reset value on the next commit.
+  const [zoomSongId, setZoomSongId] = useState<number | null>(song?.id ?? null);
+  if ((song?.id ?? null) !== zoomSongId) {
+    setZoomSongId(song?.id ?? null);
+    setZoomState(ZOOM_IDENTITY);
+  }
+
   // OCR state for the song currently being viewed. Derived: a stored
   // ocrState with a non-matching songId behaves as "not run yet". Switching
   // songs naturally invalidates without an effect-driven reset.
@@ -400,6 +442,203 @@ export function Fullscreen() {
     };
   }, [song]);
 
+  // Pinch-zoom + pan + double-tap on the zoom wrapper. Native touch events
+  // (not Pointer Events) because iOS Safari's multi-touch via Pointer Events
+  // is still flaky for simultaneous touches in PWAs — touchstart/move/end
+  // is the boring path that always reports both fingers. `touch-action: none`
+  // on the wrapper plus explicit preventDefault inside two-finger move
+  // suppresses the browser's own pinch / double-tap zoom that would
+  // otherwise compete with ours.
+  useEffect(() => {
+    const el = zoomWrapRef.current;
+    if (!el) return;
+
+    type PinchStart = {
+      dist: number;
+      localCx: number;
+      localCy: number;
+      startScale: number;
+    };
+    let pinchStart: PinchStart | null = null;
+    let panStart:
+      | { x: number; y: number; tx: number; ty: number }
+      | null = null;
+    let lastTapAt = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+
+    const baseRect = () => {
+      // Parent is the untransformed bg container; the wrapper itself reports
+      // a transformed bounding rect, which would feed wrong center / size
+      // values back into the pinch math.
+      const parent = el.parentElement;
+      return parent
+        ? parent.getBoundingClientRect()
+        : new DOMRect(0, 0, 0, 0);
+    };
+
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.min(Math.max(v, lo), hi);
+
+    const clampPan = (tx: number, ty: number, scale: number) => {
+      const b = baseRect();
+      // At scale s, the wrapper visually extends s× its base size around its
+      // center. Allowable translate is half of the overflow on each axis.
+      const maxTx = (b.width * (scale - 1)) / 2;
+      const maxTy = (b.height * (scale - 1)) / 2;
+      return {
+        tx: clamp(tx, -maxTx, maxTx),
+        ty: clamp(ty, -maxTy, maxTy),
+      };
+    };
+
+    // Map a screen point to the wrapper's untransformed local coordinates
+    // (origin at the wrapper's geometric center is (b.width/2, b.height/2)).
+    // We anchor on a local point so the pinch math is independent of where
+    // the wrapper happens to be on screen after translation.
+    const screenToLocal = (sx: number, sy: number) => {
+      const b = baseRect();
+      const z = zoomRef.current;
+      const cx = b.width / 2;
+      const cy = b.height / 2;
+      return {
+        x: cx + (sx - b.left - cx - z.tx) / z.scale,
+        y: cy + (sy - b.top - cy - z.ty) / z.scale,
+      };
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const a = e.touches[0];
+        const c = e.touches[1];
+        const dist = Math.hypot(a.clientX - c.clientX, a.clientY - c.clientY);
+        const sx = (a.clientX + c.clientX) / 2;
+        const sy = (a.clientY + c.clientY) / 2;
+        const local = screenToLocal(sx, sy);
+        pinchStart = {
+          dist,
+          localCx: local.x,
+          localCy: local.y,
+          startScale: zoomRef.current.scale,
+        };
+        panStart = null;
+        lastTapAt = 0;
+        return;
+      }
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const now = Date.now();
+        // Double-tap toggles between 1× and 2.5× anchored on the tap point.
+        // 280 ms / 28 px windows match what iOS uses for its own native
+        // double-tap recognition, so users can't accidentally trigger a
+        // single-tap action between two intended double-taps.
+        if (
+          now - lastTapAt < 280 &&
+          Math.hypot(t.clientX - lastTapX, t.clientY - lastTapY) < 28
+        ) {
+          e.preventDefault();
+          lastTapAt = 0;
+          const z = zoomRef.current;
+          if (z.scale > 1.05) {
+            setZoom({ scale: 1, tx: 0, ty: 0, animate: true });
+          } else {
+            const b = baseRect();
+            const scale = 2.5;
+            const cx = b.left + b.width / 2;
+            const cy = b.top + b.height / 2;
+            // Keep (t.clientX, t.clientY) at the same screen position
+            // after scaling around the center: tx = (1 - s) * (sx - cx).
+            const tx = (1 - scale) * (t.clientX - cx);
+            const ty = (1 - scale) * (t.clientY - cy);
+            const cp = clampPan(tx, ty, scale);
+            setZoom({ scale, tx: cp.tx, ty: cp.ty, animate: true });
+          }
+          return;
+        }
+        lastTapAt = now;
+        lastTapX = t.clientX;
+        lastTapY = t.clientY;
+        const z = zoomRef.current;
+        panStart =
+          z.scale > 1
+            ? { x: t.clientX, y: t.clientY, tx: z.tx, ty: z.ty }
+            : null;
+      }
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchStart) {
+        e.preventDefault();
+        const a = e.touches[0];
+        const c = e.touches[1];
+        const dist = Math.hypot(a.clientX - c.clientX, a.clientY - c.clientY);
+        const sx = (a.clientX + c.clientX) / 2;
+        const sy = (a.clientY + c.clientY) / 2;
+        const scale = clamp(
+          (pinchStart.startScale * dist) / pinchStart.dist,
+          1,
+          5,
+        );
+        const b = baseRect();
+        // Forward equation: sx = b.left + b.width/2 + s*(localCx - b.width/2) + tx
+        const tx =
+          sx - b.left - b.width / 2 - scale * (pinchStart.localCx - b.width / 2);
+        const ty =
+          sy - b.top - b.height / 2 - scale * (pinchStart.localCy - b.height / 2);
+        const cp = clampPan(tx, ty, scale);
+        setZoom({ scale, tx: cp.tx, ty: cp.ty, animate: false });
+        return;
+      }
+      if (e.touches.length === 1 && panStart) {
+        e.preventDefault();
+        const t = e.touches[0];
+        const z = zoomRef.current;
+        const tx = panStart.tx + (t.clientX - panStart.x);
+        const ty = panStart.ty + (t.clientY - panStart.y);
+        const cp = clampPan(tx, ty, z.scale);
+        setZoom({ scale: z.scale, tx: cp.tx, ty: cp.ty, animate: false });
+      }
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        pinchStart = null;
+        panStart = null;
+        const z = zoomRef.current;
+        // Snap fully back if user pinched out close to (or past) 1×. The
+        // clamp keeps scale >= 1 during the gesture, but this rounds away
+        // the tail-end animations and resets the translation cleanly.
+        if (z.scale < 1.02) {
+          setZoom({ scale: 1, tx: 0, ty: 0, animate: true });
+        }
+        return;
+      }
+      if (e.touches.length === 1 && pinchStart) {
+        // One finger of a pinch lifted — convert the remaining finger into
+        // a pan anchor so the user can keep dragging without re-tapping.
+        pinchStart = null;
+        const t = e.touches[0];
+        const z = zoomRef.current;
+        panStart =
+          z.scale > 1
+            ? { x: t.clientX, y: t.clientY, tx: z.tx, ty: z.ty }
+            : null;
+      }
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [setZoom]);
+
   if (!song) return null;
 
   return (
@@ -490,7 +729,7 @@ export function Fullscreen() {
           highlights in the chord notation. The dark gutters (when aspect
           ratios differ) match the page bg seamlessly. */}
       <div
-        className={`relative min-h-0 flex-1 transition-colors duration-200 ${
+        className={`relative min-h-0 flex-1 overflow-hidden transition-colors duration-200 ${
           // When the load fails we swap to the app's dark surface so the
           // error card lives on a brand-matching background instead of
           // a stark chord-sheet white (or invert-mode black) gutter.
@@ -529,77 +768,99 @@ export function Fullscreen() {
             onClose={close}
           />
         )}
-        <img
-          // Bump the key on retry to force React to remount — same src
-          // would otherwise re-serve the failed entry from the in-memory
-          // image cache instead of re-fetching.
-          key={`${song.id}-${retryToken}`}
-          ref={handleImgRef}
-          src={src}
-          alt=""
-          // VITE_IMAGE_BASE points at the R2 Custom Domain whose
-          // Transform Rule returns `Access-Control-Allow-Origin: *`.
-          // With this attribute the response is "cors" (not opaque) and
-          // Chrome's opaque-padding tax stays off — without it every
-          // cached image counts as ~7 MB toward quota regardless of its
-          // real size, blowing past Safari's offline budget on the
-          // first dozen entries.
-          crossOrigin="anonymous"
-          onLoad={() => {
-            setLoadedId(song.id);
-            // <img> loaded — but the SW's CacheFirst put() may or may not
-            // have actually cached it (stale SW from a previous deploy,
-            // pattern mismatch on cross-origin R2 URLs, etc). ensureCached
-            // checks the cache directly and writes it ourselves via
-            // cache.put if missing — guarantees the green offline-dot
-            // turns on when it should, not "sometimes".
-            ensureCached(song).then((ok) => {
-              if (ok) notifyCacheChanged();
-            });
-          }}
-          onError={() => setErrorId(song.id)}
-          onClick={(e) => e.stopPropagation()}
-          draggable={false}
-          decoding="async"
-          // No opacity hide / transition. The previous opacity-0 →
-          // opacity-100 / 300 ms fade made every cached open feel like a
-          // network load: the bytes were ready in ~30 ms but the user
-          // saw 300 ms+ of white-with-fading-image. Browsers handle the
-          // visual transition natively — they keep the previously-painted
-          // contents until the new image is decoded, so removing the
-          // forced opacity flip eliminates the white flash for cache hits
-          // and doesn't introduce any "half-decoded image" flicker for
-          // network loads (WebP at our quality is decoded all-at-once,
-          // not progressively).
-          className="block h-full w-full select-none object-contain"
+        {/* Zoom/pan wrapper — both the <img> and the chord-text overlay
+            live inside so they scale together as one unit. ChordOverlay
+            positions itself off `imgEl.clientWidth/Height` (which are NOT
+            affected by CSS transforms), so labels stay glued to chords
+            through every pinch. `touch-action: none` defers all gesture
+            handling to the touch listeners in useEffect; `willChange`
+            keeps the GPU compositor warm so pinch tracking stays jitter-
+            free on iPad. */}
+        <div
+          ref={zoomWrapRef}
+          className="relative h-full w-full"
           style={{
-            // Plain invert — flips white paper → black + black ink → white.
-            // No contrast/hue-rotate/saturation tweaks; those over-processed
-            // the image and the user prefers the straight inversion.
-            filter: invertImages ? "invert(1)" : undefined,
-            imageRendering: "auto",
-            // Hide the broken-image icon + alt text while the error
-            // overlay is showing. Empty `alt=""` already suppresses the
-            // text fallback in most browsers but the broken-image glyph
-            // still paints — display:none kills both reliably.
-            display: errored ? "none" : undefined,
+            transform: `translate3d(${zoom.tx}px, ${zoom.ty}px, 0) scale(${zoom.scale})`,
+            transformOrigin: "center center",
+            transition: zoom.animate
+              ? "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)"
+              : "none",
+            touchAction: "none",
+            willChange: "transform",
           }}
-        />
-        {/* Transposed-chord overlay. Renders when OCR has finished AND
-            either (a) the user has picked a non-identity (From, To), or
-            (b) debug mode is on so the user can audit detection coverage.
-            Sits above the image but below the panel + error overlay
-            (which are z-10+). */}
-        {currentOcr && (transposeActive || ocrDebug) && !errored && (
-          <ChordOverlay
-            result={currentOcr.result}
-            imgEl={imgEl}
-            fromKey={fromKey}
-            toKey={toKey}
-            invert={invertImages}
-            debug={ocrDebug}
+        >
+          <img
+            // Bump the key on retry to force React to remount — same src
+            // would otherwise re-serve the failed entry from the in-memory
+            // image cache instead of re-fetching.
+            key={`${song.id}-${retryToken}`}
+            ref={handleImgRef}
+            src={src}
+            alt=""
+            // VITE_IMAGE_BASE points at the R2 Custom Domain whose
+            // Transform Rule returns `Access-Control-Allow-Origin: *`.
+            // With this attribute the response is "cors" (not opaque) and
+            // Chrome's opaque-padding tax stays off — without it every
+            // cached image counts as ~7 MB toward quota regardless of its
+            // real size, blowing past Safari's offline budget on the
+            // first dozen entries.
+            crossOrigin="anonymous"
+            onLoad={() => {
+              setLoadedId(song.id);
+              // <img> loaded — but the SW's CacheFirst put() may or may not
+              // have actually cached it (stale SW from a previous deploy,
+              // pattern mismatch on cross-origin R2 URLs, etc). ensureCached
+              // checks the cache directly and writes it ourselves via
+              // cache.put if missing — guarantees the green offline-dot
+              // turns on when it should, not "sometimes".
+              ensureCached(song).then((ok) => {
+                if (ok) notifyCacheChanged();
+              });
+            }}
+            onError={() => setErrorId(song.id)}
+            onClick={(e) => e.stopPropagation()}
+            draggable={false}
+            decoding="async"
+            // No opacity hide / transition. The previous opacity-0 →
+            // opacity-100 / 300 ms fade made every cached open feel like a
+            // network load: the bytes were ready in ~30 ms but the user
+            // saw 300 ms+ of white-with-fading-image. Browsers handle the
+            // visual transition natively — they keep the previously-painted
+            // contents until the new image is decoded, so removing the
+            // forced opacity flip eliminates the white flash for cache hits
+            // and doesn't introduce any "half-decoded image" flicker for
+            // network loads (WebP at our quality is decoded all-at-once,
+            // not progressively).
+            className="block h-full w-full select-none object-contain"
+            style={{
+              // Plain invert — flips white paper → black + black ink → white.
+              // No contrast/hue-rotate/saturation tweaks; those over-processed
+              // the image and the user prefers the straight inversion.
+              filter: invertImages ? "invert(1)" : undefined,
+              imageRendering: "auto",
+              // Hide the broken-image icon + alt text while the error
+              // overlay is showing. Empty `alt=""` already suppresses the
+              // text fallback in most browsers but the broken-image glyph
+              // still paints — display:none kills both reliably.
+              display: errored ? "none" : undefined,
+            }}
           />
-        )}
+          {/* Transposed-chord overlay. Renders when OCR has finished AND
+              either (a) the user has picked a non-identity (From, To), or
+              (b) debug mode is on so the user can audit detection coverage.
+              Sits above the image but below the panel + error overlay
+              (which are z-10+). */}
+          {currentOcr && (transposeActive || ocrDebug) && !errored && (
+            <ChordOverlay
+              result={currentOcr.result}
+              imgEl={imgEl}
+              fromKey={fromKey}
+              toKey={toKey}
+              invert={invertImages}
+              debug={ocrDebug}
+            />
+          )}
+        </div>
       </div>
 
     </div>
