@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { isInstalledPWA, isIOS } from "../lib/platform";
@@ -9,6 +9,28 @@ import { ProfileButton } from "./ProfileButton";
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+// Web Speech API — only Chrome/Edge/Android expose it (under the webkit
+// prefix on most). Safari/iOS and Firefox return undefined and the mic
+// button hides itself entirely.
+const SpeechRecognitionCtor =
+  typeof window !== "undefined"
+    ? ((window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike }).SpeechRecognition ??
+        (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition)
+    : undefined;
+const speechSupported = !!SpeechRecognitionCtor;
+
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
 }
 
 export function TopBar() {
@@ -30,7 +52,7 @@ export function TopBar() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="ค้นหาเพลง / artist..."
-            className="peer h-[52px] w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-12 pr-11 text-[16px] font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[58px] sm:text-[18px] sm:placeholder:text-base"
+            className={`peer h-[52px] w-full rounded-2xl border border-line/80 bg-bg-card/60 pl-12 ${speechSupported ? "pr-20" : "pr-11"} text-[16px] font-medium text-ink placeholder:font-normal placeholder:text-ink-mute shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition focus:border-brand/60 focus:bg-bg-card focus:outline-none focus:ring-4 focus:ring-brand/15 sm:h-[58px] sm:text-[18px] sm:placeholder:text-base`}
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
@@ -38,12 +60,13 @@ export function TopBar() {
           {query && (
             <button
               onClick={() => setQuery("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-2 text-ink-mute transition hover:bg-bg-hover hover:text-ink"
+              className={`absolute ${speechSupported ? "right-11" : "right-2.5"} top-1/2 -translate-y-1/2 rounded-lg p-2 text-ink-mute transition hover:bg-bg-hover hover:text-ink`}
               aria-label="Clear"
             >
               <XIcon className="size-[18px]" />
             </button>
           )}
+          <VoiceSearchButton onResult={setQuery} />
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
@@ -103,6 +126,90 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function VoiceSearchButton({ onResult }: { onResult: (text: string) => void }) {
+  const [listening, setListening] = useState(false);
+  const recRef = useRef<SpeechRecognitionLike | null>(null);
+
+  // Clean up an active recognition session if the component unmounts mid-listen
+  // (e.g. nav back) — leaving the mic hot would leak the indicator in the OS.
+  useEffect(() => {
+    return () => {
+      recRef.current?.abort();
+      recRef.current = null;
+    };
+  }, []);
+
+  if (!SpeechRecognitionCtor) return null;
+
+  function toggle() {
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const rec = new SpeechRecognitionCtor!();
+    rec.lang = "th-TH";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = (e) => {
+      let text = "";
+      for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+      // Speech engines tack a trailing period onto Thai dictation that
+      // tanks the substring search — strip it.
+      onResult(text.replace(/[.。]\s*$/, "").trim());
+    };
+    rec.onend = () => {
+      setListening(false);
+      recRef.current = null;
+    };
+    rec.onerror = () => {
+      setListening(false);
+      recRef.current = null;
+    };
+    recRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      // start() throws if called twice in quick succession — swallow.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={listening ? "หยุดฟัง" : "ค้นหาด้วยเสียง"}
+      title={listening ? "กำลังฟัง... แตะเพื่อหยุด" : "ค้นหาด้วยเสียง"}
+      aria-pressed={listening}
+      className={`absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-2 transition ${
+        listening
+          ? "bg-red-500/20 text-red-400 animate-pulse"
+          : "text-ink-mute hover:bg-bg-hover hover:text-ink"
+      }`}
+    >
+      <MicIcon className="size-[18px]" />
+    </button>
+  );
+}
+
+function MicIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
   );
 }
 
