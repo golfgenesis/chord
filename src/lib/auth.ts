@@ -42,7 +42,7 @@ import {
   type User,
   type UserCredential,
 } from "firebase/auth";
-import { isInstalledPWA } from "./platform";
+import { isInstalledPWA, isSafari } from "./platform";
 
 export interface AuthUser {
   uid: string;
@@ -223,21 +223,20 @@ export function subscribeAuth(cb: (u: AuthUser | null) => void): () => void {
 /**
  * Pick the right OAuth flow per platform.
  *
- * - Installed PWA (standalone, both iOS and Android): popup is BLOCKED by
- *   the browser — `window.open` of a cross-origin URL refuses to open a
- *   new window from a standalone PWA shell. Must use redirect.
- * - Everything else (desktop, mobile browser including iOS Safari):
- *   try popup FIRST. If the popup is blocked or cancelled, fall back to
- *   redirect inside signInWithProvider.
- *
- * Why not always-redirect on iOS Safari? Because signInWithRedirect bounces
- * through `chord-1a556.firebaseapp.com/__/auth/handler` which is a different
- * origin than the app. Safari's ITP isolates state across origins and may
- * lose the sign-in state on the return trip. Popup keeps everything on the
- * main app origin's tab, which sidesteps that whole class of failure.
+ * - Installed PWA (any OS): popup is BLOCKED — `window.open` of a
+ *   cross-origin URL refuses from a standalone PWA shell.
+ * - Safari (Mac + iOS): popup completes OAuth but Safari ITP isolates the
+ *   Firebase auth iframe at `chord-1a556.firebaseapp.com` (third-party
+ *   storage from chord.golfchairat.com's perspective). The popup posts a
+ *   message back to the parent, but the parent's iframe can't read its
+ *   own auth state → user appears signed out. Redirect avoids the iframe
+ *   entirely (state passes via URL params + first-party sessionStorage).
+ * - Everything else (Chrome / Edge / Firefox on desktop or Android):
+ *   popup works cleanly. Use it as default. If somehow blocked, fall back
+ *   to redirect inside signInWithProvider.
  */
 function shouldUseRedirect(): boolean {
-  return isInstalledPWA();
+  return isInstalledPWA() || isSafari();
 }
 
 async function signInWithProvider(
