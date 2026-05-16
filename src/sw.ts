@@ -34,7 +34,20 @@ precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
 // 2) SPA navigation fallback to index.html ------------------------------------
-registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html")));
+// IMPORTANT: NavigationRoute matches every navigation request by default,
+// which means it also catches paths that should reach Cloudflare Pages
+// Functions / Firebase Auth handlers (e.g. `/__/auth/handler`,
+// `/__/firebase/init.json`, `/api/*`). Without a denylist the SW serves
+// cached `index.html` for those URLs and Cloudflare never sees the
+// request — so our `functions/_middleware.ts` proxy looks dead even when
+// it's deployed correctly. This was the silent killer of mobile login:
+// the OAuth popup opens chord.golfchairat.com/__/auth/handler and the
+// SW returns the chord SPA from cache instead of letting the proxy run.
+registerRoute(
+  new NavigationRoute(createHandlerBoundToURL("index.html"), {
+    denylist: [/^\/__\//, /^\/api\//],
+  }),
+);
 
 // 3) songs.bin (obfuscated payload) — stale-while-revalidate -----------------
 registerRoute(

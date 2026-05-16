@@ -21,25 +21,24 @@
 //   Safari's perspective every request and Set-Cookie is first-party,
 //   ITP no longer interferes.
 //
-// Why `_middleware.ts` instead of a routed handler:
+// Why `_middleware.ts`:
 //   - Cloudflare Pages silently skips function files under directories
 //     whose name starts with `_` (the natural path `functions/__/...`
 //     is dropped). So we can't host the function directly at /__/*.
-//   - `_redirects` rewrites (200 status) DON'T re-invoke functions for
-//     the rewritten path — they only serve static assets. A rewrite
-//     `/__/* → /auth-proxy/*` falls through to the SPA fallback because
-//     there's no static asset at the rewritten path and the function
-//     bound to that path is not re-evaluated.
-//   - `functions/[[catchall]].ts` at the root level didn't intercept
-//     requests in testing either (likely because Pages reserves root
-//     routing for static + SPA fallback).
-//   - `functions/_middleware.ts` is the documented pattern for "run
-//     this code on every request". Despite the underscore prefix
-//     (which Cloudflare ignores elsewhere) this filename is
-//     specifically recognized. We dispatch on pathname inside:
+//   - `_middleware.ts` is the documented Cloudflare Pages pattern for
+//     "run this code on every request" — it intercepts all routes at
+//     and below its directory level. We dispatch on pathname inside:
 //     requests under `/__/` get proxied; anything else defers via
-//     `context.next()` (which falls through to static assets and then
-//     SPA fallback in `_redirects`).
+//     `context.next()` (falls through to static assets and the SPA
+//     fallback in `_redirects`).
+//
+// CRITICAL PAIRING — Service Worker denylist:
+//   This proxy ONLY runs if the request actually reaches Cloudflare.
+//   The PWA service worker at `src/sw.ts` registers a NavigationRoute
+//   that, by default, serves cached `index.html` for every navigation
+//   — which means it would short-circuit `/__/auth/handler` etc. before
+//   Cloudflare ever sees them. The SW therefore lists `/__/*` and
+//   `/api/*` in its `denylist`. If you change either side, change both.
 //
 // Why a Cloudflare Pages Function instead of just _redirects:
 //   _redirects supports cross-origin destinations only as 301/302
@@ -76,19 +75,6 @@ const HEADERS_TO_STRIP = [
 
 export const onRequest: PagesFn = async (context) => {
   const url = new URL(context.request.url);
-
-  // Diagnostic endpoint — confirms the middleware is reaching Cloudflare's
-  // routing. Hit /__/proxy-test in the browser; if you see the literal
-  // string below, the function IS deployed and running, and any /__/auth
-  // failures are happening in the upstream fetch / response rewriting.
-  // If instead you see the chord SPA, the function isn't being invoked
-  // by Cloudflare (deployment config issue).
-  if (url.pathname === "/__/proxy-test") {
-    return new Response(
-      `proxy middleware is running\nrequest host: ${url.host}\ntimestamp: ${new Date().toISOString()}`,
-      { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
-    );
-  }
 
   // Only intercept Firebase Auth's reserved paths. Everything else flows
   // through normally (static assets first, then SPA fallback via

@@ -1,6 +1,0 @@
-{
-  "version": 1,
-  "description": "Force Cloudflare Pages to route /__/* and /api/* through Functions. Without this Cloudflare may aggressively use the _redirects SPA fallback for paths that don't have explicit static assets.",
-  "include": ["/__/*", "/api/*"],
-  "exclude": []
-}
