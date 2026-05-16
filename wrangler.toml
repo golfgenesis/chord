@@ -1,0 +1,18 @@
+# Cloudflare Pages project configuration. Adding this file makes Pages
+# pick up settings deterministically — without it Cloudflare relies on
+# implicit auto-detection which has been silently dropping our
+# `functions/_middleware.ts` despite the file existing in the repo.
+#
+# This config explicitly:
+#   - Names the pages_build_output_dir so Cloudflare knows where the
+#     static assets are.
+#   - Sets compatibility_date so Functions can use modern Worker APIs
+#     (matches the date already shown in the dashboard Runtime panel).
+#
+# It does NOT change anything else — no bindings, no env vars, no
+# routes overrides. Those continue to be managed by the dashboard +
+# the existing _redirects / _routes.json files.
+
+name = "chord"
+compatibility_date = "2026-05-13"
+pages_build_output_dir = "./dist"
