@@ -91,6 +91,29 @@ function SheetBody({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
+  // Surface mobile-redirect failures from a previous page load. Without
+  // this the user comes back from OAuth, sees "not logged in", has no
+  // idea why. Reading on mount is cheap (synchronous module read).
+  useEffect(() => {
+    let cancelled = false;
+    loadAuthMod().then((m) => {
+      if (cancelled) return;
+      const e = m.getLastRedirectError();
+      if (e) {
+        const code = (e as { code?: string }).code;
+        setError(
+          code
+            ? `${m.describeAuthError(e)} (${code})`
+            : m.describeAuthError(e),
+        );
+        m.clearLastRedirectError();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function withBusy(
     kind: "google" | "facebook" | "email",
     fn: () => Promise<unknown>,

@@ -130,12 +130,28 @@ export function initAuth(): Auth | null {
       const cred = await getRedirectResult(authNN);
       if (cred?.providerId) setActiveProvider(cred.providerId);
     } catch (err) {
-      if ((err as { code?: string })?.code !== "auth/no-auth-event") {
+      // Stash so the UI can surface this to the user. Silent failures
+      // here used to mean "tried login on mobile, came back, looks
+      // not logged in, no idea why" — now SignInSheet shows the code.
+      const code = (err as { code?: string })?.code;
+      if (code !== "auth/no-auth-event") {
         console.error("[auth] getRedirectResult error:", err);
+        lastRedirectError = (err as Error) ?? null;
       }
     }
   })();
   return auth;
+}
+
+// Last error from getRedirectResult, if any. SignInSheet checks this on
+// mount so the user sees why their mobile redirect login didn't take.
+// Cleared once the user signs in successfully or explicitly dismisses.
+let lastRedirectError: Error | null = null;
+export function getLastRedirectError(): Error | null {
+  return lastRedirectError;
+}
+export function clearLastRedirectError(): void {
+  lastRedirectError = null;
 }
 
 // Fallback order if the user hasn't signed in this session (no active
