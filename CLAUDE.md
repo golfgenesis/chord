@@ -113,6 +113,16 @@ Dev: set `VITE_IMAGE_BASE` in `.env.local` to the same custom domain prod uses, 
 
 The image set on disk and in R2 is **WebP** (near-lossless q=80) — `scripts/convert_to_webp.py` converts in place and deletes the source PNG. `src/sw.ts` does not transcode at runtime.
 
+### Firebase Auth `authDomain` — same-site subdomain trick
+
+The app is served from `chord.golfchairat.com` (Cloudflare Pages). The default Firebase Auth `authDomain` would be `chord-1a556.firebaseapp.com` — a **third-party origin** from Safari's perspective, so Safari's Intelligent Tracking Prevention isolates the Firebase auth iframe and breaks the popup-to-parent OAuth state sync (user appears signed out after a successful Google/Facebook login).
+
+Fix: a custom subdomain on Firebase Hosting, `auth.chord.golfchairat.com`, set up via Firebase Console → Hosting → Add custom domain (Cloudflare DNS CNAME → `chord-1a556.web.app`, **DNS-only / grey cloud** so Cloudflare doesn't intercept). Both `chord.golfchairat.com` and `auth.chord.golfchairat.com` share registrable `golfchairat.com`, so Safari treats them as same-site and lets the auth flow through. The Cloudflare Pages env var `VITE_FIREBASE_AUTH_DOMAIN` is set to `auth.chord.golfchairat.com`; `.env.local` keeps the default `chord-1a556.firebaseapp.com` for `npm run dev` on localhost (no subdomain DNS available there). Facebook OAuth's Valid Redirect URIs must include `https://auth.chord.golfchairat.com/__/auth/handler` (alongside the firebaseapp.com URL for local dev).
+
+Don't try to proxy `/__/auth/*` through Cloudflare Pages Functions to keep everything under one domain — Firebase Hosting auto-injects an `init.js` with a hard-coded authDomain that we can't easily rewrite, and the handler page does extra origin checks the proxy can't satisfy. The same-site subdomain is the documented Firebase recommendation; the proxy path was tried and dropped.
+
+`public/_headers` sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` so Chrome 110+ doesn't block the `popup.closed` poll that Firebase uses to detect popup completion. Required for the popup-based OAuth flow we use everywhere except installed PWAs (PWAs fall through to `signInWithRedirect` inside `auth.ts` — `window.open` of cross-origin URLs is blocked in standalone mode).
+
 ## Scripts layout
 
 - `scripts/_env.py` — auto-loads `.env.local` into `os.environ`. Imported transitively by every Python script that needs credentials.

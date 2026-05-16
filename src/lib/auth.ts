@@ -42,7 +42,7 @@ import {
   type User,
   type UserCredential,
 } from "firebase/auth";
-import { isInstalledPWA, isSafari } from "./platform";
+import { isInstalledPWA } from "./platform";
 
 export interface AuthUser {
   uid: string;
@@ -224,19 +224,19 @@ export function subscribeAuth(cb: (u: AuthUser | null) => void): () => void {
  * Pick the right OAuth flow per platform.
  *
  * - Installed PWA (any OS): popup is BLOCKED — `window.open` of a
- *   cross-origin URL refuses from a standalone PWA shell.
- * - Safari (Mac + iOS): popup completes OAuth but Safari ITP isolates the
- *   Firebase auth iframe at `chord-1a556.firebaseapp.com` (third-party
- *   storage from chord.golfchairat.com's perspective). The popup posts a
- *   message back to the parent, but the parent's iframe can't read its
- *   own auth state → user appears signed out. Redirect avoids the iframe
- *   entirely (state passes via URL params + first-party sessionStorage).
- * - Everything else (Chrome / Edge / Firefox on desktop or Android):
- *   popup works cleanly. Use it as default. If somehow blocked, fall back
- *   to redirect inside signInWithProvider.
+ *   cross-origin URL refuses from a standalone PWA shell. Must redirect.
+ * - Everything else (desktop + mobile browser, including Safari):
+ *   popup works. Safari's ITP used to break popup-based OAuth when
+ *   authDomain was Firebase's default `<project>.firebaseapp.com` (third
+ *   party to our app), but we now use a same-site subdomain authDomain
+ *   (`auth.chord.golfchairat.com`) on Firebase Hosting — both share the
+ *   registrable `golfchairat.com`, so ITP treats the auth iframe as
+ *   first-party and lets the popup → parent state sync through.
+ * - If a popup somehow gets blocked (some embedded webviews / strict
+ *   blocker settings), signInWithProvider falls back to redirect.
  */
 function shouldUseRedirect(): boolean {
-  return isInstalledPWA() || isSafari();
+  return isInstalledPWA();
 }
 
 async function signInWithProvider(
@@ -383,10 +383,6 @@ export function getPendingLink(): PendingLink | null {
     providerLabel: pendingLink.providerLabel,
     existingMethods: pendingLink.existingMethods,
   };
-}
-
-export function clearPendingLink(): void {
-  pendingLink = null;
 }
 
 /**

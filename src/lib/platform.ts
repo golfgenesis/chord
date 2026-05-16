@@ -25,22 +25,3 @@ export function isInstalledPWA(): boolean {
     (navigator as { standalone?: boolean }).standalone === true
   );
 }
-
-/**
- * True on Safari (desktop Mac OR iOS — both iPhone and iPad). Excludes
- * Chrome / Edge / Firefox / Brave on Mac, all of which use a different UA.
- *
- * Used by auth.ts to force signInWithRedirect over signInWithPopup on
- * Safari: ITP (Intelligent Tracking Prevention) treats Firebase's auth
- * iframe at `*.firebaseapp.com` as third-party storage and blocks the
- * popup-to-parent state sync. Redirect keeps everything in same-tab
- * first-party context where ITP allows storage access.
- */
-export function isSafari(): boolean {
-  const ua = navigator.userAgent;
-  // Chromium-based browsers include "Chrome" or "CriOS" (Chrome on iOS) or
-  // "Edg" in UA — exclude them first.
-  if (/Chrome|CriOS|Edg|Edge|OPR|Opera|Firefox|FxiOS/.test(ua)) return false;
-  // Genuine Safari includes "Safari" and "Version/" but not Chrome markers.
-  return /Safari/.test(ua) && /Version\//.test(ua);
-}
