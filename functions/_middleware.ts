@@ -77,6 +77,19 @@ const HEADERS_TO_STRIP = [
 export const onRequest: PagesFn = async (context) => {
   const url = new URL(context.request.url);
 
+  // Diagnostic endpoint — confirms the middleware is reaching Cloudflare's
+  // routing. Hit /__/proxy-test in the browser; if you see the literal
+  // string below, the function IS deployed and running, and any /__/auth
+  // failures are happening in the upstream fetch / response rewriting.
+  // If instead you see the chord SPA, the function isn't being invoked
+  // by Cloudflare (deployment config issue).
+  if (url.pathname === "/__/proxy-test") {
+    return new Response(
+      `proxy middleware is running\nrequest host: ${url.host}\ntimestamp: ${new Date().toISOString()}`,
+      { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
+    );
+  }
+
   // Only intercept Firebase Auth's reserved paths. Everything else flows
   // through normally (static assets first, then SPA fallback via
   // _redirects). context.next() is Cloudflare Pages' "continue down the
