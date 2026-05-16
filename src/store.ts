@@ -436,15 +436,17 @@ export const useApp = create<State>((set, get) => {
     });
     const invertImages = loadLocal<boolean>("invertImages", false);
     const autoOpen = loadLocal<boolean>("autoOpen", true);
-    set({ invertImages, autoOpen });
+    // Push identity + room into the store BEFORE any await so the shell's
+    // first render shows the right room code (instead of the empty default
+    // for a few frames). Cheap — these are all synchronous reads.
+    set({ clientId, roomCode, invertImages, autoOpen });
 
-    // Kick off heavy work in parallel: the songs dataset, the Firebase chunk,
-    // and the locally-persisted collections. The shell renders as soon as the
-    // local state lands; songs and Firebase fill in independently.
+    // Kick off heavy work in parallel: the songs dataset and the locally-
+    // persisted collections. The shell renders as soon as the local state
+    // lands; songs fill in independently. Firebase is deferred — see below.
     const songsPromise = fetch("/songs.bin")
       .then((r) => r.arrayBuffer())
       .then(decodeSongs);
-    const firebasePromise = loadFirebase();
     const [favArr, latestRaw, playlists] = await Promise.all([
       loadJSON<number[]>("favorites", []),
       loadJSON<number[]>("latest", []),
@@ -453,12 +455,16 @@ export const useApp = create<State>((set, get) => {
     const latest = latestRaw.slice(0, LATEST_CAP);
 
     set({
-      clientId,
-      roomCode,
       favorites: new Set(favArr),
       latest,
       playlists,
     });
+
+    // Start loading the Firebase chunk (~425 KB) now — late enough that it
+    // doesn't contend with songs.bin for the very first network slot, but
+    // early enough that it's usually ready by the time songs decode. We
+    // await it AFTER songs land so the UI never blocks on room sync.
+    const firebasePromise = loadFirebase();
 
     // Songs dataset
     const songs = await songsPromise;

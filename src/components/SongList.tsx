@@ -32,6 +32,7 @@ export function SongList() {
   const tab = useApp((s) => s.tab);
   const activePlaylistId = useApp((s) => s.activePlaylistId);
   const query = useApp((s) => s.query);
+  const loaded = useApp((s) => s.loaded);
   // The active playlist is "mine" only when it's in our local playlist
   // array — playlists belonging to other room members aren't editable
   // from this device (no add / remove / reorder).
@@ -50,6 +51,11 @@ export function SongList() {
     sortableScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     setShowScrollTop(false);
   }
+
+  // The songs payload (~1.4 MB) lands a beat after the shell renders. Show
+  // a list-style skeleton instead of the "ไม่พบเพลง" empty state, so the
+  // first paint communicates "list is on its way" rather than "no results".
+  if (!loaded) return <ListSkeleton />;
 
   if (tab === "playlists" && !activePlaylistId) {
     return (
@@ -501,6 +507,35 @@ function DragHandleIcon() {
       <circle cx="9" cy="18" r="1.5" />
       <circle cx="15" cy="18" r="1.5" />
     </svg>
+  );
+}
+
+function ListSkeleton() {
+  // Eight shimmer rows is enough to cover the visible area on phone and
+  // tablet without being a wall of placeholder boxes. Inline the colors
+  // (no Tailwind animate-pulse) because animate-pulse + opacity on the
+  // ink-mute base reads as "disabled text", not "loading".
+  return (
+    <div
+      className="flex-1 overflow-hidden"
+      style={{ touchAction: "pan-y" }}
+      aria-busy="true"
+      aria-live="polite"
+    >
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div
+          key={i}
+          className="mx-3 my-0.5 flex items-center gap-3 rounded-2xl px-3 py-3"
+        >
+          <span className="size-5 shrink-0 rounded-full bg-bg-card/70 animate-pulse" />
+          <span
+            className="h-4 flex-1 rounded-md bg-bg-card/70 animate-pulse"
+            style={{ maxWidth: `${70 - (i % 4) * 8}%` }}
+          />
+          <span className="size-5 shrink-0 rounded-md bg-bg-card/70 animate-pulse" />
+        </div>
+      ))}
+    </div>
   );
 }
 

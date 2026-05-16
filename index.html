@@ -21,18 +21,88 @@
 
     <title>Chord</title>
 
+    <!-- Kick off the songs payload download in parallel with the JS bundle.
+         Without this, fetch("/songs.bin") only starts after main.tsx parses
+         + executes + store.init() runs — easily 1-2 s of dead time on a
+         cold mobile load. `as=fetch` matches the `fetch()` call in
+         songsCodec; crossorigin keeps the response usable by the same
+         CORS-mode fetch. -->
+    <link rel="preload" href="/songs.bin" as="fetch" crossorigin="anonymous" />
+
     <link
       rel="preconnect"
       href="https://fonts.gstatic.com"
       crossorigin
     />
+    <!-- Async Google Fonts: load as `media=print` so the stylesheet is
+         non-render-blocking, then flip to `media=all` once it's parsed.
+         Saves ~200-600 ms on the first paint over slow networks. The
+         <noscript> fallback keeps fonts working when JS is disabled. -->
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+      />
+    </noscript>
+
+    <!-- Inline boot splash. Paints from the HTML alone — visible before our
+         JS bundle has even started parsing. React's createRoot().render()
+         replaces #root's contents on first render, so this disappears the
+         instant the shell mounts. -->
+    <style>
+      html, body { background-color: #08070d; }
+      body { margin: 0; color: #fff; -webkit-font-smoothing: antialiased; }
+      #root { height: 100%; }
+      .boot-splash {
+        position: fixed; inset: 0;
+        display: flex; flex-direction: column; gap: 16px;
+        align-items: center; justify-content: center;
+        background: #08070d;
+        color: rgba(255,255,255,0.85);
+        font: 600 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", "IBM Plex Sans Thai", system-ui, sans-serif;
+        letter-spacing: -0.005em;
+      }
+      .boot-splash__mark {
+        position: relative;
+        width: 64px; height: 64px; border-radius: 18px;
+        background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 55%, #f59e0b 100%);
+        box-shadow: 0 12px 40px -8px rgba(139, 92, 246, 0.55);
+        display: grid; place-items: center;
+        animation: boot-pulse 1.6s ease-in-out infinite;
+      }
+      .boot-splash__mark::before {
+        content: ""; position: absolute; inset: 0; border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.22), transparent 60%);
+        pointer-events: none;
+      }
+      .boot-splash__title { font-size: 15px; font-weight: 600; }
+      .boot-splash__hint { font-size: 12px; color: rgba(255,255,255,0.45); margin-top: -4px; }
+      @keyframes boot-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(0.94); opacity: 0.85; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-splash" aria-hidden="true">
+        <div class="boot-splash__mark">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="#fff" aria-hidden="true">
+            <path d="M9 17V5l12-2v12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="6" cy="17" r="3" />
+            <circle cx="18" cy="15" r="3" />
+          </svg>
+        </div>
+        <div class="boot-splash__title">Chord</div>
+        <div class="boot-splash__hint">กำลังเปิดแอป...</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
