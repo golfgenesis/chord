@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
+import { isInstalledPWA, isIOS } from "../lib/platform";
 import { XIcon } from "./icons";
 
 // Dynamic import so the auth SDK is only fetched when this sheet opens.
@@ -170,6 +171,7 @@ function SheetBody({
           เชื่อมต่อบัญชีสำเร็จ — ครั้งหน้า login ด้วยวิธีไหนก็ได้
         </div>
       )}
+      <IOSPWANotice />
       {pending && !linkedJustNow && (
         <PendingLinkBanner
           pending={pending}
@@ -366,6 +368,31 @@ function EmailForm({
               : "เข้าสู่ระบบ"}
       </button>
     </form>
+  );
+}
+
+// iOS PWA + signInWithRedirect = silent failure. Apple's WKWebView in
+// standalone PWA mode discards sessionStorage when navigating to a
+// different site (e.g. accounts.google.com) and back, so Firebase's
+// pending-redirect state is gone by the time getRedirectResult runs.
+// `auth.chord.golfchairat.com` being same-site as the app doesn't help —
+// the kill happens on the trip to Google.
+//
+// We can't fix this from JS; Apple needs to fix WKWebView. Surface the
+// limitation so iOS PWA users know to use Email/Password instead of
+// burning time on Google/Facebook that won't work.
+function IOSPWANotice() {
+  if (!isInstalledPWA() || !isIOS()) return null;
+  return (
+    <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-[13px] leading-[1.5] text-amber-200">
+      <div className="font-semibold">⚠️ ใช้แอปนี้บน iPhone (PWA)</div>
+      <div className="mt-1 text-amber-100/90">
+        login Google / Facebook อาจไม่ทำงานใน PWA — เป็นข้อจำกัดของ iOS
+      </div>
+      <div className="mt-1.5 text-amber-100/80">
+        แนะนำ: ใช้ <span className="font-semibold text-amber-100">Email + รหัสผ่าน</span> ด้านล่าง
+      </div>
+    </div>
   );
 }
 
