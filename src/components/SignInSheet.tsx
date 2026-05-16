@@ -130,7 +130,12 @@ function SheetBody({
       // what to do next instead of just showing the raw error message.
       const p = mod.getPendingLink();
       if (p) setPending(p);
-      setError(mod.describeAuthError(err));
+      // Append the raw Firebase error code so the user can share the exact
+      // failure when login doesn't work — much faster than trying to debug
+      // by descriptions alone. Hidden from non-error cases.
+      const code = (err as { code?: string })?.code;
+      const msg = mod.describeAuthError(err);
+      setError(code ? `${msg} (${code})` : msg);
     } finally {
       setBusy(null);
     }

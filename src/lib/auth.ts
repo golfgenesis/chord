@@ -42,7 +42,6 @@ import {
   type User,
   type UserCredential,
 } from "firebase/auth";
-import { isIOS } from "./platform";
 import { isInstalledPWA } from "./platform";
 
 export interface AuthUser {
@@ -224,19 +223,21 @@ export function subscribeAuth(cb: (u: AuthUser | null) => void): () => void {
 /**
  * Pick the right OAuth flow per platform.
  *
- * Popup is preferred on desktop/Chrome Android — it returns the credential
- * synchronously and we don't lose page state. But popup is blocked on:
- *   - iOS Safari (always, even with a user gesture in some versions)
- *   - PWA standalone mode (Safari) — `window.open` of cross-origin URLs is
- *     blocked outright in installed PWAs
- *   - Some embedded webviews
- * In those, we fall back to signInWithRedirect, which navigates the page
- * away to the provider and back. getRedirectResult() picks it up in initAuth.
+ * - Installed PWA (standalone, both iOS and Android): popup is BLOCKED by
+ *   the browser — `window.open` of a cross-origin URL refuses to open a
+ *   new window from a standalone PWA shell. Must use redirect.
+ * - Everything else (desktop, mobile browser including iOS Safari):
+ *   try popup FIRST. If the popup is blocked or cancelled, fall back to
+ *   redirect inside signInWithProvider.
+ *
+ * Why not always-redirect on iOS Safari? Because signInWithRedirect bounces
+ * through `chord-1a556.firebaseapp.com/__/auth/handler` which is a different
+ * origin than the app. Safari's ITP isolates state across origins and may
+ * lose the sign-in state on the return trip. Popup keeps everything on the
+ * main app origin's tab, which sidesteps that whole class of failure.
  */
 function shouldUseRedirect(): boolean {
-  if (isInstalledPWA()) return true;
-  if (isIOS()) return true;
-  return false;
+  return isInstalledPWA();
 }
 
 async function signInWithProvider(
@@ -247,7 +248,23 @@ async function signInWithProvider(
     await signInWithRedirect(auth, provider);
     return null; // result is picked up by getRedirectResult after redirect
   }
-  return signInWithPopup(auth, provider);
+  try {
+    return await signInWithPopup(auth, provider);
+  } catch (err) {
+    // Popup got blocked by the browser (e.g. some embedded webviews, or
+    // strict popup-blocker settings). Fall back to redirect so the user
+    // still has a path forward. "popup-closed-by-user" is NOT a fallback
+    // signal — that means the user deliberately closed the popup.
+    const code = (err as { code?: string })?.code;
+    if (
+      code === "auth/popup-blocked" ||
+      code === "auth/operation-not-supported-in-this-environment"
+    ) {
+      await signInWithRedirect(auth, provider);
+      return null;
+    }
+    throw err;
+  }
 }
 
 // Helper: run a sign-in operation with active-provider tracking. We set
