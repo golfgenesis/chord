@@ -26,9 +26,18 @@
 //   isn't allowed there. Pages Functions can issue an outbound fetch()
 //   and stream the response back, which is what we need here.
 //
-// Path layout — Cloudflare Pages routes file `functions/__/[[catchall]].ts`
-// to URL pattern `/__/*`, so this single function handles both
-// `/__/auth/handler`, `/__/auth/iframe`, `/__/firebase/init.json`, etc.
+// Path layout & routing:
+//   Cloudflare Pages IGNORES function files under directories whose name
+//   starts with `_` (the underscore prefix is reserved for Pages config
+//   files). So we can't put this function at `functions/__/[[catchall]].ts`
+//   even though that matches the URL shape Firebase uses.
+//
+//   Workaround: function lives at `functions/auth-proxy/[[catchall]].ts`
+//   (matches URL `/auth-proxy/*`), and `public/_redirects` rewrites
+//   `/__/*` → `/auth-proxy/*` (same-origin, supported by _redirects).
+//   The browser always sees `/__/...` in the URL bar. Inside this
+//   function we map the path BACK to `/__/...` when constructing the
+//   upstream URL so Firebase's handler receives the expected request.
 
 interface Context {
   request: Request;
@@ -58,7 +67,13 @@ const HEADERS_TO_STRIP = [
 
 export const onRequest: PagesFn = async ({ request }) => {
   const url = new URL(request.url);
-  const targetUrl = `https://${UPSTREAM_HOST}${url.pathname}${url.search}`;
+  // Remap the rewritten path: _redirects sent /__/X here as /auth-proxy/X.
+  // Strip /auth-proxy/ and prepend /__/ to recover the original Firebase
+  // path the upstream expects.
+  const upstreamPath = url.pathname.startsWith("/auth-proxy/")
+    ? "/__/" + url.pathname.slice("/auth-proxy/".length)
+    : url.pathname;
+  const targetUrl = `https://${UPSTREAM_HOST}${upstreamPath}${url.search}`;
 
   // Clone headers, strip Cloudflare-injected ones, keep everything else
   // (Accept, User-Agent, Cookie, etc.) so the upstream sees a normal req.
@@ -93,6 +108,31 @@ export const onRequest: PagesFn = async ({ request }) => {
     for (const c of setCookies) {
       const cleaned = c.replace(/;\s*Domain=[^;]+/i, "");
       respHeaders.append("Set-Cookie", cleaned);
+    }
+  }
+
+  // Rewrite init.json to advertise OUR domain as the authDomain. The
+  // upstream's init.json hard-codes `authDomain: "chord-1a556.firebaseapp.com"`
+  // (Firebase's default), and the auth handler page running on
+  // chord.golfchairat.com refuses to operate when the configured
+  // authDomain doesn't match window.location.host — it bails to "stop"
+  // before any OAuth round-trip starts. Patch the JSON so the handler
+  // sees its own host listed as the authDomain.
+  if (upstreamPath === "/__/firebase/init.json") {
+    try {
+      const json = (await upstream.clone().json()) as Record<string, unknown>;
+      json.authDomain = url.host;
+      const body = JSON.stringify(json);
+      respHeaders.set("content-type", "application/json; charset=utf-8");
+      respHeaders.delete("content-length"); // body length changed
+      respHeaders.delete("content-encoding"); // we re-emit uncompressed
+      return new Response(body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: respHeaders,
+      });
+    } catch {
+      // Fall through to verbatim response if upstream isn't JSON for any reason.
     }
   }
 
