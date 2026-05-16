@@ -21,20 +21,25 @@
 //   Safari's perspective every request and Set-Cookie is first-party,
 //   ITP no longer interferes.
 //
-// Why a root catchall + internal dispatch:
-//   - Cloudflare Pages ignores function files under directories whose
-//     name starts with `_`, so the natural path `functions/__/...` is
-//     silently not deployed.
+// Why `_middleware.ts` instead of a routed handler:
+//   - Cloudflare Pages silently skips function files under directories
+//     whose name starts with `_` (the natural path `functions/__/...`
+//     is dropped). So we can't host the function directly at /__/*.
 //   - `_redirects` rewrites (200 status) DON'T re-invoke functions for
 //     the rewritten path — they only serve static assets. A rewrite
 //     `/__/* → /auth-proxy/*` falls through to the SPA fallback because
-//     there's no static asset at `/auth-proxy/*` and the function at
-//     that path is not re-evaluated after rewriting.
-//   - The catchall at `functions/[[catchall]].ts` runs for any path that
-//     doesn't already match a static asset. We dispatch on pathname
-//     inside: requests under `/__/` get proxied, anything else defers
-//     via `context.next()` (which falls through to static assets and
-//     then SPA fallback in `_redirects`).
+//     there's no static asset at the rewritten path and the function
+//     bound to that path is not re-evaluated.
+//   - `functions/[[catchall]].ts` at the root level didn't intercept
+//     requests in testing either (likely because Pages reserves root
+//     routing for static + SPA fallback).
+//   - `functions/_middleware.ts` is the documented pattern for "run
+//     this code on every request". Despite the underscore prefix
+//     (which Cloudflare ignores elsewhere) this filename is
+//     specifically recognized. We dispatch on pathname inside:
+//     requests under `/__/` get proxied; anything else defers via
+//     `context.next()` (which falls through to static assets and then
+//     SPA fallback in `_redirects`).
 //
 // Why a Cloudflare Pages Function instead of just _redirects:
 //   _redirects supports cross-origin destinations only as 301/302
