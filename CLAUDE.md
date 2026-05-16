@@ -29,8 +29,11 @@ The dev server has the PWA service worker **enabled** (`devOptions.enabled: true
 Three sync layers, three different stores, intentionally separated:
 
 1. **Local-only** (`src/lib/persist.ts`) — `idb-keyval` for `favorites`/`latest`/`playlists`, `localStorage` for `clientId`/`roomCode`/`invertImages`/`autoOpen`.
-2. **Per-client cloud** (`src/lib/cloudSync.ts`) — Firestore doc at `clients/{clientId}` mirrors `favorites`/`latest`/`roomCode` across devices that share a `clientId`. **No Firebase Auth** — `clientId` is an 8-char random string in localStorage, so Firestore rules must allow open read/write on `clients/{clientId}`. This was a deliberate switch from anonymous auth because orphan auth records were accumulating on every cache clear.
-3. **Per-room realtime** (`src/lib/firebase.ts`, RTDB) — `rooms/{code}/{current,owner,playlists/{clientId}}`. Falls back to a `BroadcastChannel` mock when `VITE_FIREBASE_*` env vars are absent — only useful for same-browser tab testing.
+2. **Per-identity cloud** (`src/lib/cloudSync.ts`) — Firestore doc that mirrors `favorites`/`latest`/`roomCode` (and, when signed in, `playlists`) across devices that share an identity. Two flavors:
+   - Signed-out → `clients/{clientId}`. `clientId` is an 8-char random string in localStorage. Rules allow open read/write on this collection (acceptable: data is non-sensitive, clientId is hard to guess). Backward compatible with the pre-auth release.
+   - Signed-in → `users/{uid}` via Firebase Auth (Google / Facebook / Email-Password — Apple intentionally excluded to avoid paid Apple Dev membership). Rules require `request.auth.uid == uid`. Sign-in runs a one-time per-uid merge (`mergeUserData` in [src/store.ts](src/store.ts)) so local edits made before login don't get clobbered by remote.
+   - Source switching happens inside `init()`'s `startSyncWith` closure. Auth state is the trigger; `clientId` stays the same regardless (it's still the *session* identity in rooms — see Per-client playlists below).
+3. **Per-room realtime** (`src/lib/firebase.ts`, RTDB) — `rooms/{code}/{current,owner,playlists/{clientId}}`. Falls back to a `BroadcastChannel` mock when `VITE_FIREBASE_*` env vars are absent — only useful for same-browser tab testing. Auth state does NOT affect room semantics; `clientId` is the session identity here so two devices of the same logged-in user appear as two separate sessions in a room.
 
 ### Room ownership
 

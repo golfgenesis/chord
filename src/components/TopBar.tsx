@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { isInstalledPWA, isIOS } from "../lib/platform";
 import { CheckIcon, ShareIcon, XIcon } from "./icons";
+import { ProfileButton } from "./ProfileButton";
+
+// Feature flag — keep auth UI hidden until we explicitly enable it in env.
+// Allows shipping the code to prod without exposing sign-in to users until
+// every provider (Facebook in particular) is configured in its console.
+const authEnabled = import.meta.env.VITE_AUTH_ENABLED === "true";
 
 // Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
 interface BeforeInstallPromptEvent extends Event {
@@ -49,6 +55,7 @@ export function TopBar() {
           <InstallButton />
           <AutoOpenButton />
           <ShareButton roomCode={roomCode} />
+          {authEnabled && <ProfileButton />}
         </div>
       </div>
     </header>

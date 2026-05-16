@@ -1,0 +1,54 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#221b3a"/>
+      <stop offset="1" stop-color="#08060e"/>
+    </linearGradient>
+
+    <radialGradient id="halo" cx="0.5" cy="0" r="0.95">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="0.55" stop-color="#f472b6"/>
+      <stop offset="1" stop-color="#fbbf24"/>
+    </linearGradient>
+
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+
+    <clipPath id="clip">
+      <rect width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#clip)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <rect width="1024" height="1024" fill="url(#halo)"/>
+
+    <g filter="url(#glow)" opacity="0.55" transform="translate(224 224) scale(24)">
+      <path d="M9 17V5l12-2v12" fill="none" stroke="url(#brand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6" cy="17" r="3" fill="url(#brand)"/>
+      <circle cx="18" cy="15" r="3" fill="url(#brand)"/>
+    </g>
+
+    <g transform="translate(224 224) scale(24)">
+      <path d="M9 17V5l12-2v12" fill="none" stroke="url(#brand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6" cy="17" r="3" fill="url(#brand)"/>
+      <circle cx="18" cy="15" r="3" fill="url(#brand)"/>
+    </g>
+
+    <rect width="1024" height="1024" fill="url(#gloss)"/>
+  </g>
+
+  <rect x="0.5" y="0.5" width="1023" height="1023" rx="223.5" ry="223.5"
+        fill="none" stroke="#ffffff" stroke-opacity="0.10"/>
+</svg>

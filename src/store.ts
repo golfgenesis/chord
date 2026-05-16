@@ -33,11 +33,14 @@ function preloadSongImage(song: Song): void {
 // them dynamically so they end up in their own chunk and load in parallel
 // with songs.bin — the search UI never blocks on them.
 import type { RoomSync } from "./lib/firebase";
+import type { AuthUser } from "./lib/auth";
 type FbMod = typeof import("./lib/firebase");
 type CsMod = typeof import("./lib/cloudSync");
+type AuthMod = typeof import("./lib/auth");
 
 let fbMod: FbMod | null = null;
 let csMod: CsMod | null = null;
+let authMod: AuthMod | null = null;
 let firebaseLoading: Promise<void> | null = null;
 
 function loadFirebase(): Promise<void> {
@@ -45,10 +48,12 @@ function loadFirebase(): Promise<void> {
     firebaseLoading = Promise.all([
       import("./lib/firebase"),
       import("./lib/cloudSync"),
+      import("./lib/auth"),
     ])
-      .then(([fb, cs]) => {
+      .then(([fb, cs, auth]) => {
         fbMod = fb;
         csMod = cs;
+        authMod = auth;
       })
       .catch((err) => {
         console.error("Firebase chunk failed to load:", err);
@@ -108,6 +113,62 @@ function normalizePlaylists(raw: unknown): Playlist[] {
       songIds: Array.isArray(p.songIds) ? p.songIds.filter((x) => typeof x === "number") : [],
       createdAt: typeof p.createdAt === "number" ? p.createdAt : Date.now(),
     }));
+}
+
+/**
+ * Merge "what's on this device right now" with "what's already on the server
+ * for this account" — runs once per sign-in to bring both sides in sync.
+ *
+ * Rules:
+ *   - favorites: union (a song favorited on either device stays favorited)
+ *   - latest: local-first dedup, capped at LATEST_CAP — the device the user
+ *     is actively on is the most authoritative source for recency
+ *   - playlists: keyed by id; on collision pick whichever has more songs
+ *     (heuristic — assumes users add over time more often than they prune;
+ *     can be refined later if it bites)
+ *   - roomCode: local wins (user just opened this device, so this is where
+ *     they want to be — don't yank them to whatever room another device
+ *     happens to be in)
+ */
+function mergeUserData(
+  local: import("./lib/cloudSync").UserData,
+  remote: import("./lib/cloudSync").UserData,
+): import("./lib/cloudSync").UserData {
+  const favs = new Set(local.favorites);
+  for (const f of remote.favorites ?? []) favs.add(f);
+
+  const seen = new Set<number>();
+  const latest: number[] = [];
+  for (const id of local.latest ?? []) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      latest.push(id);
+    }
+  }
+  for (const id of remote.latest ?? []) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      latest.push(id);
+    }
+  }
+  if (latest.length > LATEST_CAP) latest.length = LATEST_CAP;
+
+  const byId = new Map<string, Playlist>();
+  for (const p of remote.playlists ?? []) byId.set(p.id, p);
+  for (const p of local.playlists ?? []) {
+    const existing = byId.get(p.id);
+    if (!existing || existing.songIds.length < p.songIds.length) {
+      byId.set(p.id, p);
+    }
+  }
+  const playlists = [...byId.values()];
+
+  return {
+    favorites: [...favs],
+    latest,
+    playlists,
+    roomCode: local.roomCode || remote.roomCode,
+  };
 }
 
 function isRoomOwner(s: Pick<State, "clientId" | "roomOwnerClientId">): boolean {
@@ -221,6 +282,10 @@ interface State {
   unsubscribeRoomOwner: (() => void) | null;
   sync: RoomSync | null;
 
+  // auth
+  user: AuthUser | null;     // null = anonymous (clientId mode)
+  authReady: boolean;        // true after the first onAuthStateChanged fires
+
   // persisted collections
   favorites: Set<number>;
   latest: number[]; // most recent first
@@ -249,6 +314,10 @@ interface State {
   setActivePlaylist: (id: string | null) => void;
   toggleInvertImages: () => void;
   toggleAutoOpen: () => void;
+  // Auth-aware. Signing in switches the cloud-sync source from
+  // clients/{clientId} to users/{uid} and runs a one-time merge so the
+  // user's local state and any prior remote state combine correctly.
+  signOutLocal: () => Promise<void>;
 }
 
 export const useApp = create<State>((set, get) => {
@@ -262,12 +331,18 @@ export const useApp = create<State>((set, get) => {
   }
 
   // Persist + broadcast a new playlists array in one shot. Every mutation
-  // (add/remove/reorder/create/rename/delete) ends with the same three steps,
+  // (add/remove/reorder/create/rename/delete) ends with the same steps,
   // so we centralize them here.
   function commitPlaylists(playlists: Playlist[]) {
     set({ playlists });
     saveJSON("playlists", playlists);
     publishOwnPlaylists(playlists);
+    // Push to cloud only when signed in — anon clients/{clientId} docs
+    // intentionally don't carry playlists (they're room-scoped only for
+    // anonymous users, matching pre-auth behavior).
+    if (get().user) {
+      csMod?.pushUpdate({ playlists });
+    }
   }
 
   return {
@@ -291,6 +366,9 @@ export const useApp = create<State>((set, get) => {
   unsubscribeRoomPlaylists: null,
   unsubscribeRoomOwner: null,
   sync: null,
+
+  user: null,
+  authReady: false,
 
   favorites: new Set(),
   latest: [],
@@ -412,42 +490,155 @@ export const useApp = create<State>((set, get) => {
     // we'll let cloud sync below decide whether to override).
     get().setRoomCode(roomCode, false);
 
-    // Cross-device sync of per-user data via Firestore (Anonymous Auth).
-    // Playlists are per-room (not per-user) and handled by the room sync above.
-    // The first remote snapshot may carry a stale roomCode from this client's
-    // last session. If the URL just told us which room to be in, that wins —
-    // we push the URL room up to cloud instead of adopting cloud's old value.
-    // Subsequent snapshots can adopt normally (that's cross-device sync).
+    // ── Cloud sync (auth-aware) ────────────────────────────────────────────
+    // Source of cloud sync is decided by current auth state:
+    //   - signed out → clients/{clientId}  (same as pre-auth behavior)
+    //   - signed in  → users/{uid}         (carries playlists too)
+    //
+    // The first remote snapshot may carry a stale roomCode from a prior
+    // session of this identity. If the URL just told us which room to be in,
+    // that wins — we push the URL room up to cloud instead of adopting the
+    // stale value. The flag is one-shot and applies only to the very first
+    // snapshot received across all source switches in this app session.
     let pendingUrlPush = urlForcedRoom;
-    csMod
-      ?.startCloudSync(
-        clientId,
-        { favorites: favArr, latest, roomCode },
-        (remote) => {
-          const remoteLatest = (remote.latest ?? []).slice(0, LATEST_CAP);
-          set({
-            favorites: new Set(remote.favorites ?? []),
-            latest: remoteLatest,
-          });
-          saveJSON("favorites", remote.favorites ?? []);
-          saveJSON("latest", remoteLatest);
-          if (pendingUrlPush) {
-            pendingUrlPush = false;
-            if (remote.roomCode !== get().roomCode) {
-              csMod?.pushUpdate({ roomCode: get().roomCode });
+    let unsubCloud: (() => void) | null = null;
+    const migratedUids = new Set<string>();
+
+    const startSyncWith = async (
+      source: import("./lib/cloudSync").SyncSource,
+    ) => {
+      if (!csMod) return;
+      // Tear down old subscription before installing a new one. cloudSync's
+      // teardown flushes any pending writes, so we don't lose a debounced
+      // update that hadn't fired yet.
+      if (unsubCloud) {
+        unsubCloud();
+        unsubCloud = null;
+      }
+
+      // First sign-in on a given uid in this session: merge local+remote
+      // BEFORE wiring the subscription. We can't let onSnapshot's first
+      // emit clobber local edits the user made before logging in — read
+      // once, merge, push the merged blob, then subscribe.
+      if (source.kind === "user" && !migratedUids.has(source.uid)) {
+        migratedUids.add(source.uid);
+        try {
+          const remote = await csMod.readRemoteOnce(source);
+          const localBlob: import("./lib/cloudSync").UserData = {
+            favorites: [...get().favorites],
+            latest: get().latest,
+            playlists: get().playlists,
+            roomCode: get().roomCode,
+          };
+          if (remote == null) {
+            // Fresh account — just push local up.
+            await csMod.writeRemote(source, localBlob);
+          } else {
+            const merged = mergeUserData(localBlob, remote);
+            const mergedPlaylists = merged.playlists ?? [];
+            set({
+              favorites: new Set(merged.favorites),
+              latest: merged.latest,
+              playlists: mergedPlaylists,
+            });
+            saveJSON("favorites", merged.favorites);
+            saveJSON("latest", merged.latest);
+            saveJSON("playlists", mergedPlaylists);
+            // Re-publish into the current room so other members see the
+            // post-merge playlists, not the stale pre-merge ones.
+            const { sync: roomSync, clientId: myCid } = get();
+            if (roomSync && myCid) {
+              roomSync
+                .publishMyPlaylists(myCid, mergedPlaylists)
+                .catch(console.error);
             }
-            return;
+            await csMod.writeRemote(source, merged);
           }
-          if (
-            remote.roomCode &&
-            /^\d{6}$/.test(remote.roomCode) &&
-            remote.roomCode !== get().roomCode
-          ) {
-            get().setRoomCode(remote.roomCode, false);
+        } catch (err) {
+          console.error("[store] sign-in migration failed:", err);
+        }
+      }
+
+      // Snapshot of local state to seed the subscription's "no remote doc
+      // exists" branch. After migration above, this matches what's on the
+      // server anyway.
+      const initial: import("./lib/cloudSync").UserData = {
+        favorites: [...get().favorites],
+        latest: get().latest,
+        roomCode: get().roomCode,
+        ...(source.kind === "user" ? { playlists: get().playlists } : {}),
+      };
+
+      unsubCloud = csMod.startCloudSync(source, initial, (remote) => {
+        const remoteLatest = (remote.latest ?? []).slice(0, LATEST_CAP);
+        const patch: Partial<{
+          favorites: Set<number>;
+          latest: number[];
+          playlists: Playlist[];
+        }> = {
+          favorites: new Set(remote.favorites ?? []),
+          latest: remoteLatest,
+        };
+        // Only adopt remote playlists when this is a user source — anon
+        // `clients/{clientId}` docs don't carry playlists.
+        if (source.kind === "user" && Array.isArray(remote.playlists)) {
+          patch.playlists = normalizePlaylists(remote.playlists);
+        }
+        set(patch);
+        saveJSON("favorites", remote.favorites ?? []);
+        saveJSON("latest", remoteLatest);
+        if (patch.playlists) {
+          saveJSON("playlists", patch.playlists);
+          // Re-publish my playlists into the room so guests see remote-driven
+          // edits made on the user's other device.
+          const { sync: roomSync, clientId: myCid } = get();
+          if (roomSync && myCid && patch.playlists) {
+            roomSync
+              .publishMyPlaylists(myCid, patch.playlists)
+              .catch(console.error);
           }
-        },
-      )
-      .catch((err) => console.error("cloud sync init failed:", err));
+        }
+        if (pendingUrlPush) {
+          pendingUrlPush = false;
+          if (remote.roomCode !== get().roomCode) {
+            csMod?.pushUpdate({ roomCode: get().roomCode });
+          }
+          return;
+        }
+        if (
+          remote.roomCode &&
+          /^\d{6}$/.test(remote.roomCode) &&
+          remote.roomCode !== get().roomCode
+        ) {
+          get().setRoomCode(remote.roomCode, false);
+        }
+      });
+    };
+
+    // Subscribe to auth state. First emit (which Firebase delivers
+    // synchronously from cached state) decides the initial source.
+    if (authMod) {
+      authMod.subscribeAuth((authUser) => {
+        const prev = get().user;
+        set({ user: authUser, authReady: true });
+        const samePrincipal =
+          (prev?.uid ?? null) === (authUser?.uid ?? null);
+        // Skip work if the principal didn't actually change. subscribeAuth
+        // can fire on profile updates (display name, photo) which are not
+        // identity changes — don't tear down sync for those.
+        if (samePrincipal && unsubCloud) return;
+        const source: import("./lib/cloudSync").SyncSource = authUser
+          ? { kind: "user", uid: authUser.uid }
+          : { kind: "client", clientId };
+        startSyncWith(source).catch((err) =>
+          console.error("[store] startSyncWith failed:", err),
+        );
+      });
+    } else {
+      // Auth chunk failed to load — fall back to anonymous client sync.
+      set({ authReady: true });
+      startSyncWith({ kind: "client", clientId }).catch(console.error);
+    }
   },
 
   setQuery: (q) => set({ query: q }),
@@ -723,6 +914,19 @@ export const useApp = create<State>((set, get) => {
     const next = !get().invertImages;
     set({ invertImages: next });
     saveLocal("invertImages", next);
+  },
+
+  async signOutLocal() {
+    if (!authMod) return;
+    try {
+      // After this resolves Firebase fires onAuthStateChanged(null), which
+      // our subscribeAuth handler picks up and switches cloud sync back to
+      // clients/{clientId}. Local state (favorites/latest/playlists/etc.)
+      // stays as-is on this device — signing out doesn't wipe data.
+      await authMod.signOutNow();
+    } catch (err) {
+      console.error("[auth] signOut failed:", err);
+    }
   },
   };
 });

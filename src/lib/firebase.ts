@@ -14,11 +14,13 @@ import {
   type OnDisconnect,
 } from "firebase/database";
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
   doc,
   type Firestore,
   type DocumentReference,
 } from "firebase/firestore";
+import { initAuth } from "./auth";
 import type { Playlist, RoomOwner, RoomState } from "../types";
 
 const cfg = {
@@ -36,7 +38,27 @@ export const firebaseEnabled = Boolean(cfg.apiKey && cfg.databaseURL);
 if (firebaseEnabled) {
   const app = initializeApp(cfg as Required<typeof cfg>);
   db = getDatabase(app);
-  firestore = getFirestore(app);
+  // persistentLocalCache lets Firestore reads work offline (from IndexedDB
+  // backed cache) and queues writes while disconnected — pairs with the
+  // app's broader "IndexedDB is source of truth, Firebase is sync" model.
+  // Single-tab mode (default) is fine; we don't expect multi-tab use.
+  try {
+    firestore = initializeFirestore(app, {
+      localCache: persistentLocalCache(),
+    });
+  } catch (err) {
+    // initializeFirestore throws if a Firestore instance already exists
+    // for this app — shouldn't happen given module-load ordering, but
+    // bail gracefully if it does (Firestore stays null → cloudSync
+    // becomes a no-op, app keeps working from local state).
+    console.error("[firebase] initializeFirestore failed:", err);
+    firestore = null;
+  }
+  // Initialize Auth lazily — initAuth() itself is idempotent and does the
+  // minimum work (getAuth + getRedirectResult). Components that don't
+  // touch auth never trigger the Auth SDK code path because we only
+  // subscribe / call sign-in methods from inside auth-aware code.
+  initAuth();
 }
 
 /**
@@ -51,6 +73,18 @@ if (firebaseEnabled) {
 export function clientDocRef(clientId: string): DocumentReference | null {
   if (!firestore) return null;
   return doc(firestore, "clients", clientId);
+}
+
+/**
+ * Per-user Firestore doc — used by cloud sync when the user is signed in.
+ * Schema mirrors `clients/{clientId}` so the same sync code path can target
+ * either source: `{ favorites, latest, roomCode, playlists?, updatedAt? }`.
+ *
+ * Rules guard this so only the signed-in owner of `uid` can read/write.
+ */
+export function userDocRef(uid: string): DocumentReference | null {
+  if (!firestore) return null;
+  return doc(firestore, "users", uid);
 }
 
 // ---- Room sync (Realtime DB) -----------------------------------------------
