@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
+import legacy from "@vitejs/plugin-legacy";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
 import fs from "node:fs";
@@ -43,6 +44,46 @@ export default defineConfig({
   plugins: [
     react(),
     imagesMiddleware(),
+    // Emit a second "legacy" bundle for old browsers that don't support
+    // native ES modules / modern syntax. Vite 8's default build target
+    // only covers Safari 14+ / Chrome ~130+ — without this, anyone on
+    // an older device sees a blank screen because their browser can't
+    // parse the modern bundle's optional-chaining / nullish-coalescing
+    // / BigInt syntax.
+    //
+    // The plugin emits BOTH a modern and a legacy bundle:
+    //   - Modern Chrome/Safari (`modernTargets` below) loads the
+    //     modern bundle (no overhead).
+    //   - Older browsers load the legacy bundle (transpiled to ES5 +
+    //     polyfills via core-js) selected by the SystemJS shim.
+    //
+    // Floor chosen: Service-Worker minimum — Safari 11.3+, Chrome 60+,
+    // Edge 79+, Firefox 60+. Below those, SW + PWA features wouldn't
+    // work anyway, so polyfill bloat for unsupported environments
+    // isn't worth it.
+    //
+    // modernTargets raises the bar for what counts as "modern" — without
+    // it, a Chrome 88 user could load the modern bundle and crash on
+    // syntax it doesn't recognize. We set it to the union of "Vite-
+    // default ES2022-supporting browsers".
+    legacy({
+      targets: [
+        "ios >= 11.3",
+        "safari >= 11.3",
+        "chrome >= 60",
+        "android >= 5",
+        "edge >= 79",
+        "firefox >= 60",
+        "samsung >= 8",
+      ],
+      modernTargets: [
+        "chrome >= 87",
+        "safari >= 14",
+        "edge >= 88",
+        "firefox >= 78",
+      ],
+      modernPolyfills: true,
+    }),
     VitePWA({
       // We write our own service worker (src/sw.ts) instead of letting workbox
       // generate one so we can wire custom routing/caching for the chord-image
