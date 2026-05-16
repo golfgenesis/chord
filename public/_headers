@@ -1,0 +1,14 @@
+# Cloudflare Pages / Netlify response-header rules.
+# Format: https://developers.cloudflare.com/pages/configuration/headers/
+
+/*
+  # Allow opening popup windows to cross-origin URLs AND keep an opener
+  # reference so we can detect when they close. Required for Firebase
+  # Auth's signInWithPopup: it opens chord-1a556.firebaseapp.com/__/auth/handler
+  # and polls `popup.closed` to know when OAuth is done. Without this,
+  # Chrome 110+ blocks the closed-check (Cross-Origin-Opener-Policy default
+  # is restrictive on cross-origin popups) and the popup hangs after login.
+  # `same-origin-allow-popups` is the recommended middle ground from
+  # both Firebase and Chrome teams — strict for same-origin, permissive
+  # for popups.
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
