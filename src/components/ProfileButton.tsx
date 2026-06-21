@@ -33,35 +33,22 @@ export function ProfileButton() {
   const [showIOSSheet, setShowIOSSheet] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
 
-  // Quick actions that live inline in the TopBar on tablet/desktop are
-  // collapsed into this menu on phones. The hooks are mounted here (not in
-  // the popover) so the `beforeinstallprompt` listener is armed before the
-  // event fires and the share "copied" flash survives the popover's renders.
+  // The avatar is the permanent home for install + share (and the account
+  // entry) on every screen size. Auto-open additionally folds in here on
+  // phones, where it isn't shown as an inline TopBar toggle. The PWA/share
+  // hooks are mounted here (not in the popover) so the `beforeinstallprompt`
+  // listener is armed before the event fires and the share "copied" flash
+  // survives the popover's renders.
   const roomCode = useApp((s) => s.roomCode);
   const autoOpen = useApp((s) => s.autoOpen);
   const toggleAutoOpen = useApp((s) => s.toggleAutoOpen);
   const { canInstall, trigger } = useInstallPrompt();
   const { copied, share } = useShareRoom(roomCode);
 
-  // Render-gated on isMobile below (not reset in an effect) so a menu left
-  // open while crossing to the desktop layout simply stops rendering — the
-  // actions are inline buttons there.
-  const showMenu = isMobile && menuOpen;
-
   function openAccount() {
     setMenuOpen(false);
     if (user) setShowProfile(true);
     else setShowSignIn(true);
-  }
-
-  function handleTrigger() {
-    // On phones the avatar is the entry point for the whole utility menu;
-    // on larger screens it goes straight to the account sheet.
-    if (isMobile) {
-      setMenuOpen((v) => !v);
-      return;
-    }
-    openAccount();
   }
 
   async function handleInstall() {
@@ -87,21 +74,22 @@ export function ProfileButton() {
     <>
       <button
         ref={btnRef}
-        onClick={handleTrigger}
+        onClick={() => setMenuOpen((v) => !v)}
         className="grid size-10 place-items-center overflow-hidden rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95"
         title={user ? user.displayName || user.email || "บัญชี" : "เข้าสู่ระบบ"}
-        aria-label={user ? "Profile" : "Sign in"}
-        aria-haspopup={isMobile ? "menu" : undefined}
-        aria-expanded={isMobile ? showMenu : undefined}
+        aria-label={user ? "Profile menu" : "Menu"}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
       >
         <Avatar user={user} />
       </button>
 
-      {showMenu && (
-        <MobileQuickMenu
+      {menuOpen && (
+        <UserMenu
           anchorRef={btnRef}
           user={user}
           canInstall={canInstall}
+          showAutoOpen={isMobile}
           autoOpen={autoOpen}
           copied={copied}
           onClose={() => setMenuOpen(false)}
@@ -121,10 +109,11 @@ export function ProfileButton() {
   );
 }
 
-function MobileQuickMenu({
+function UserMenu({
   anchorRef,
   user,
   canInstall,
+  showAutoOpen,
   autoOpen,
   copied,
   onClose,
@@ -136,6 +125,7 @@ function MobileQuickMenu({
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   user: AuthUser | null;
   canInstall: boolean;
+  showAutoOpen: boolean;
   autoOpen: boolean;
   copied: boolean;
   onClose: () => void;
@@ -195,13 +185,15 @@ function MobileQuickMenu({
             onClick={onInstall}
           />
         )}
-        <MenuRow
-          icon={autoOpen ? <EyeIcon /> : <EyeOffIcon />}
-          label="เด้งดูเพลงตามวง"
-          active={autoOpen}
-          trailing={<Switch on={autoOpen} />}
-          onClick={onToggleAutoOpen}
-        />
+        {showAutoOpen && (
+          <MenuRow
+            icon={autoOpen ? <EyeIcon /> : <EyeOffIcon />}
+            label="เด้งดูเพลงตามวง"
+            active={autoOpen}
+            trailing={<Switch on={autoOpen} />}
+            onClick={onToggleAutoOpen}
+          />
+        )}
         <MenuRow
           icon={copied ? <CheckIcon className="size-[18px]" /> : <ShareIcon />}
           label={copied ? "คัดลอกลิงค์แล้ว" : "แชร์ห้องให้เพื่อน"}
@@ -209,11 +201,7 @@ function MobileQuickMenu({
         />
         <div className="my-1 h-px bg-line/50" />
         <MenuRow
-          icon={
-            <span className="size-full overflow-hidden rounded-md">
-              <Avatar user={user} />
-            </span>
-          }
+          icon={<Avatar user={user} />}
           label={user ? user.displayName || user.email || "บัญชีของฉัน" : "เข้าสู่ระบบ"}
           onClick={onAccount}
         />

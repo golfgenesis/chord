@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
-import { CheckIcon, EyeIcon, EyeOffIcon, InstallIcon, ShareIcon, XIcon } from "./icons";
-import { IOSInstallSheet } from "./IOSInstallSheet";
-import { useInstallPrompt, useShareRoom } from "../hooks/usePwaActions";
+import { EyeIcon, EyeOffIcon, XIcon } from "./icons";
 import { ProfileButton } from "./ProfileButton";
 
 // Web Speech API — only Chrome/Edge/Android expose it (under the webkit
@@ -63,12 +61,12 @@ export function TopBar() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* Utility actions sit inline on tablet/desktop; on phones they
-              collapse into the profile menu (see ProfileButton). */}
+          {/* Auto-open stays a one-tap toggle inline on tablet/desktop (it's
+              flipped often during a session); on phones it collapses into the
+              profile menu. Install + share always live in the profile menu
+              regardless of screen size — see ProfileButton. */}
           <div className="hidden items-center gap-1.5 sm:flex">
-            <InstallButton />
             <AutoOpenButton />
-            <ShareButton />
           </div>
           <ProfileButton />
         </div>
@@ -100,29 +98,6 @@ function BrandMark() {
         </span>
       </div>
     </div>
-  );
-}
-
-function IconButton({
-  children,
-  onClick,
-  title,
-  "aria-label": ariaLabel,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  title?: string;
-  "aria-label"?: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="grid size-10 place-items-center rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95"
-      title={title}
-      aria-label={ariaLabel}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -252,44 +227,5 @@ function AutoOpenButton() {
     >
       {autoOpen ? <EyeIcon /> : <EyeOffIcon />}
     </button>
-  );
-}
-
-function InstallButton() {
-  const { canInstall, trigger } = useInstallPrompt();
-  const [showIOSSheet, setShowIOSSheet] = useState(false);
-
-  if (!canInstall) return null;
-
-  async function install() {
-    if (await trigger()) setShowIOSSheet(true);
-  }
-
-  return (
-    <>
-      <IconButton
-        onClick={install}
-        title="เพิ่มลงหน้าจอหลัก"
-        aria-label="Install app"
-      >
-        <InstallIcon />
-      </IconButton>
-      {showIOSSheet && <IOSInstallSheet onClose={() => setShowIOSSheet(false)} />}
-    </>
-  );
-}
-
-function ShareButton() {
-  const roomCode = useApp((s) => s.roomCode);
-  const { copied, share } = useShareRoom(roomCode);
-
-  return (
-    <IconButton
-      onClick={share}
-      title={copied ? "คัดลอกลิงค์แล้ว" : "แชร์ลิงค์ห้องนี้ให้เพื่อน"}
-      aria-label="Share room link"
-    >
-      {copied ? <CheckIcon className="size-[18px]" /> : <ShareIcon />}
-    </IconButton>
   );
 }
