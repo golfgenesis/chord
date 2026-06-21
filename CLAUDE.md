@@ -28,7 +28,7 @@ The dev server has the PWA service worker **enabled** (`devOptions.enabled: true
 
 Three sync layers, three different stores, intentionally separated:
 
-1. **Local-only** (`src/lib/persist.ts`) — `idb-keyval` for `favorites`/`latest`/`playlists`, `localStorage` for `clientId`/`roomCode`/`invertImages`/`autoOpen`.
+1. **Local-only** (`src/lib/persist.ts`) — `idb-keyval` for `favorites`/`latest`/`playlists`/`playlistTombstones`, `localStorage` for `clientId`/`roomCode`/`invertImages`/`autoOpen`.
 2. **Per-identity cloud** (`src/lib/cloudSync.ts`) — Firestore doc that mirrors `favorites`/`latest`/`roomCode` (and, when signed in, `playlists`) across devices that share an identity. Two flavors:
    - Signed-out → `clients/{clientId}`. `clientId` is an 8-char random string in localStorage. Rules allow open read/write on this collection (acceptable: data is non-sensitive, clientId is hard to guess). Backward compatible with the pre-auth release.
    - Signed-in → `users/{uid}` via Firebase Auth (Google / Facebook / Email-Password — Apple intentionally excluded to avoid paid Apple Dev membership). Rules require `request.auth.uid == uid`. Sign-in runs a one-time per-uid merge (`mergeUserData` in [src/store.ts](src/store.ts)) so local edits made before login don't get clobbered by remote.
@@ -42,6 +42,15 @@ First device into a fresh room atomically claims `rooms/{code}/owner` via `runTr
 ### Per-client playlists
 
 Playlists belong to people, not rooms. Each member publishes their own list to `rooms/{code}/playlists/{clientId}` with an `onDisconnect.remove()` on that node so the entry self-cleans when the tab closes; subscribers read the whole `rooms/{code}/playlists` map and split it into "mine" vs `othersPlaylists`. The UI uses `useMergedPlaylists()` (in [src/store.ts](src/store.ts)) — owner-first, then me, then everyone else by `clientId`, with `(2)/(3)/…` suffixes on duplicate names. Edit affordances (rename, delete, add/remove songs, DnD reorder) are gated on `entry.isMine`; everyone else's lists render as read-only. The previous "owner is the sole publisher" model is gone — there's no longer any "seed playlists when becoming owner" logic.
+
+### Playlist persistence & cross-device merge
+
+Two separate concerns from the room layer above. A playlist is **always** persisted to local IndexedDB (`playlists` + `playlistTombstones` keys), and **additionally** mirrored to the signed-in `users/{uid}` cloud doc. Anonymous (`clients/{clientId}`) docs deliberately do NOT carry playlists — signed-out playlists are local + room-scoped only.
+
+The cloud ↔ local sync is **per-playlist last-write-wins**, never whole-array overwrite (the old wholesale replace silently lost a `create` made concurrently on another device, and a re-login clobbered local with stale remote). Mechanism (all in [src/store.ts](src/store.ts)):
+- Every `Playlist` carries `updatedAt`, bumped on every mutation. Merge keeps the newest copy per id.
+- `deletePlaylist` writes a **tombstone** (`playlistTombstones: { id → deletedAt }`) instead of just dropping the row, so the delete propagates across devices/re-login instead of a stale copy resurrecting it. A live copy whose `updatedAt` is newer than its tombstone wins (edit-after-delete resurrects). Tombstones older than `TOMBSTONE_TTL_MS` (180d) are pruned.
+- `mergePlaylistData()` is the single idempotent/convergent merge used by both the sign-in migration (`mergeUserData`) and the live `onRemoteUpdate` handler. `onRemoteUpdate` merges remote into local and, guarded by `playlistFingerprint()` (id-sorted, so element order is irrelevant), pushes the converged set back up only when local carried something the server lacked — so two devices settle on the union in one round with no ping-pong.
 
 ### Picker view-state sync (auto-open + close)
 

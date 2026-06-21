@@ -1,0 +1,39 @@
+{
+  "packageId": "com.golfchairat.chord",
+  "host": "chord.golfchairat.com",
+  "name": "Chord",
+  "launcherName": "Chord",
+  "display": "fullscreen",
+  "orientation": "default",
+  "themeColor": "#08070d",
+  "themeColorDark": "#08070d",
+  "navigationColor": "#08070d",
+  "navigationColorDark": "#08070d",
+  "navigationDividerColor": "#08070d",
+  "navigationDividerColorDark": "#08070d",
+  "backgroundColor": "#08070d",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://chord.golfchairat.com/icon-512.png",
+  "maskableIconUrl": "https://chord.golfchairat.com/icon-maskable-512.png",
+  "webManifestUrl": "https://chord.golfchairat.com/manifest.webmanifest",
+  "fullScopeUrl": "https://chord.golfchairat.com/",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "minSdkVersion": 21
+}

@@ -53,6 +53,11 @@ export function useRoomSongAlert() {
   // receivers should close too, but a receiver closing locally is private
   // and never flips this flag.
   const lastPickerViewing = useRef<boolean>(true);
+  // Track the last pickedAt we acted on. `open()` stamps a fresh pickedAt on
+  // every pick — including a re-pick of the SAME songId — so a strictly-newer
+  // pickedAt is the only reliable "this is a genuinely new pick" signal. The
+  // old songId-only dedup silently swallowed same-song re-picks.
+  const lastPickedAt = useRef<number>(0);
   // Stamp the moment this hook mounts. Any room song whose `pickedAt` is
   // older than this is treated as pre-existing state — we record it as
   // baseline but don't auto-open, so the user lands on the home page on
@@ -66,10 +71,14 @@ export function useRoomSongAlert() {
     // pickerViewing is optional on the wire (legacy rooms predate it).
     // Treat missing as `true` so old snapshots behave the same as before.
     const pickerViewing = room?.pickerViewing !== false;
+    // Authoritative freshness signal — see lastPickedAt note above.
+    const pickedAt = room?.pickedAt ?? 0;
     const prevSongId = lastSongId.current;
     const prevPickerViewing = lastPickerViewing.current;
+    const prevPickedAt = lastPickedAt.current;
     lastSongId.current = songId ?? null;
     lastPickerViewing.current = pickerViewing;
+    lastPickedAt.current = pickedAt;
 
     if (!songId) return;
 
@@ -83,7 +92,6 @@ export function useRoomSongAlert() {
     // Pre-existing song in the room when we landed: record bookkeeping but
     // don't pop fullscreen. Fresh page load should show the home/list view
     // first; only picks made after mount auto-open.
-    const pickedAt = room?.pickedAt ?? 0;
     if (pickedAt > 0 && pickedAt < mountedAt.current) return;
 
     // Detect the "picker just closed" transition: same song, but
@@ -97,13 +105,15 @@ export function useRoomSongAlert() {
       return;
     }
 
-    // Auto-open trigger: a new song appeared OR the picker re-opened the
-    // existing one. If they've closed and not re-engaged (pickerViewing
-    // still false), don't pop the sheet — just update bookkeeping.
-    const newSong = songId !== prevSongId;
+    // Auto-open trigger: a different song, the SAME song re-picked (its
+    // pickedAt advanced past the one we last acted on — the songId-only check
+    // used to swallow this), OR the picker re-opening the existing one
+    // (pickerViewing false → true). If they closed and haven't re-engaged,
+    // just update bookkeeping.
+    const newPick = songId !== prevSongId || pickedAt > prevPickedAt;
     const pickerReopened =
       songId === prevSongId && !prevPickerViewing && pickerViewing;
-    if (!newSong && !pickerReopened) return;
+    if (!newPick && !pickerReopened) return;
     if (!pickerViewing) return;
 
     // Auto-open ON: pop the fullscreen chord sheet as the primary feedback.
@@ -112,7 +122,9 @@ export function useRoomSongAlert() {
     // The `false` flag suppresses re-broadcast — this is just a local
     // reflection of what a bandmate already published.
     if (autoOpen) {
-      open(song, false);
+      // broadcast=false (don't echo), recordLatest=false (a passive auto-open
+      // isn't a song this user chose, so keep it out of their "latest").
+      open(song, false, false);
     }
 
     // Notification policy:

@@ -21,15 +21,18 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { clientDocRef, firebaseEnabled, userDocRef } from "./firebase";
-import type { Playlist } from "../types";
+import type { Playlist, PlaylistTombstones } from "../types";
 
 export interface UserData {
   favorites: number[];
   latest: number[];
   roomCode?: string;
   // Only present for `{ kind: "user" }` syncs. Anonymous client docs leave
-  // this undefined (playlists for anon clients are room-scoped only).
+  // these undefined (playlists for anon clients are local + room-scoped only).
   playlists?: Playlist[];
+  // Soft-delete markers so a delete propagates across the account's devices
+  // instead of a stale device resurrecting the playlist on next merge.
+  playlistTombstones?: PlaylistTombstones;
 }
 
 export type SyncSource =

@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
+import type { AuthUser } from "../lib/auth";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { SignInSheet } from "./SignInSheet";
-import { CheckIcon, XIcon } from "./icons";
+import { CheckIcon, EyeIcon, EyeOffIcon, InstallIcon, ShareIcon, XIcon } from "./icons";
+import { IOSInstallSheet } from "./IOSInstallSheet";
+import { useInstallPrompt, useShareRoom } from "../hooks/usePwaActions";
 import {
   clearImageCache,
   getCachedUrlSet,
@@ -21,8 +25,49 @@ import {
 export function ProfileButton() {
   const user = useApp((s) => s.user);
   const authReady = useApp((s) => s.authReady);
+  const isMobile = useIsMobile();
+
   const [showSignIn, setShowSignIn] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showIOSSheet, setShowIOSSheet] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  // Quick actions that live inline in the TopBar on tablet/desktop are
+  // collapsed into this menu on phones. The hooks are mounted here (not in
+  // the popover) so the `beforeinstallprompt` listener is armed before the
+  // event fires and the share "copied" flash survives the popover's renders.
+  const roomCode = useApp((s) => s.roomCode);
+  const autoOpen = useApp((s) => s.autoOpen);
+  const toggleAutoOpen = useApp((s) => s.toggleAutoOpen);
+  const { canInstall, trigger } = useInstallPrompt();
+  const { copied, share } = useShareRoom(roomCode);
+
+  // Render-gated on isMobile below (not reset in an effect) so a menu left
+  // open while crossing to the desktop layout simply stops rendering — the
+  // actions are inline buttons there.
+  const showMenu = isMobile && menuOpen;
+
+  function openAccount() {
+    setMenuOpen(false);
+    if (user) setShowProfile(true);
+    else setShowSignIn(true);
+  }
+
+  function handleTrigger() {
+    // On phones the avatar is the entry point for the whole utility menu;
+    // on larger screens it goes straight to the account sheet.
+    if (isMobile) {
+      setMenuOpen((v) => !v);
+      return;
+    }
+    openAccount();
+  }
+
+  async function handleInstall() {
+    setMenuOpen(false);
+    if (await trigger()) setShowIOSSheet(true);
+  }
 
   if (!authReady) {
     // Skeleton placeholder keeps the TopBar layout stable while we wait
@@ -41,18 +86,176 @@ export function ProfileButton() {
   return (
     <>
       <button
-        onClick={() => (user ? setShowProfile(true) : setShowSignIn(true))}
+        ref={btnRef}
+        onClick={handleTrigger}
         className="grid size-10 place-items-center overflow-hidden rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95"
         title={user ? user.displayName || user.email || "บัญชี" : "เข้าสู่ระบบ"}
         aria-label={user ? "Profile" : "Sign in"}
+        aria-haspopup={isMobile ? "menu" : undefined}
+        aria-expanded={isMobile ? showMenu : undefined}
       >
         <Avatar user={user} />
       </button>
+
+      {showMenu && (
+        <MobileQuickMenu
+          anchorRef={btnRef}
+          user={user}
+          canInstall={canInstall}
+          autoOpen={autoOpen}
+          copied={copied}
+          onClose={() => setMenuOpen(false)}
+          onInstall={handleInstall}
+          onToggleAutoOpen={toggleAutoOpen}
+          onShare={share}
+          onAccount={openAccount}
+        />
+      )}
+
+      {showIOSSheet && <IOSInstallSheet onClose={() => setShowIOSSheet(false)} />}
       {showSignIn && <SignInSheet onClose={() => setShowSignIn(false)} />}
       {showProfile && user && (
         <ProfileSheet user={user} onClose={() => setShowProfile(false)} />
       )}
     </>
+  );
+}
+
+function MobileQuickMenu({
+  anchorRef,
+  user,
+  canInstall,
+  autoOpen,
+  copied,
+  onClose,
+  onInstall,
+  onToggleAutoOpen,
+  onShare,
+  onAccount,
+}: {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  user: AuthUser | null;
+  canInstall: boolean;
+  autoOpen: boolean;
+  copied: boolean;
+  onClose: () => void;
+  onInstall: () => void;
+  onToggleAutoOpen: () => void;
+  onShare: () => void;
+  onAccount: () => void;
+}) {
+  // Anchor the portal'd popover to the avatar's live screen position,
+  // right-aligned under it. Portalling escapes the header's backdrop-filter
+  // containing block (which would otherwise pin a fixed child to the header).
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPos({ top: r.bottom + 10, right: Math.max(12, window.innerWidth - r.right) });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [anchorRef]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!pos) return null;
+
+  return createPortal(
+    <>
+      {/* Outside-click capture layer. Sits below the popover so taps inside
+          it never reach this, and a tap on the still-visible avatar lands
+          here and closes the menu. */}
+      <div className="fixed inset-0 z-[60]" onClick={onClose} />
+      <div
+        role="menu"
+        aria-label="เมนู"
+        onClick={(e) => e.stopPropagation()}
+        className="fixed z-[61] w-64 rounded-2xl border border-white/10 bg-bg-soft/95 p-1.5 shadow-2xl backdrop-blur-xl animate-slide-up"
+        style={{ top: pos.top, right: pos.right }}
+      >
+        {canInstall && (
+          <MenuRow
+            icon={<InstallIcon className="size-[18px]" />}
+            label="เพิ่มลงหน้าจอหลัก"
+            onClick={onInstall}
+          />
+        )}
+        <MenuRow
+          icon={autoOpen ? <EyeIcon /> : <EyeOffIcon />}
+          label="เด้งดูเพลงตามวง"
+          active={autoOpen}
+          trailing={<Switch on={autoOpen} />}
+          onClick={onToggleAutoOpen}
+        />
+        <MenuRow
+          icon={copied ? <CheckIcon className="size-[18px]" /> : <ShareIcon />}
+          label={copied ? "คัดลอกลิงค์แล้ว" : "แชร์ห้องให้เพื่อน"}
+          onClick={onShare}
+        />
+        <div className="my-1 h-px bg-line/50" />
+        <MenuRow
+          icon={
+            <span className="size-full overflow-hidden rounded-md">
+              <Avatar user={user} />
+            </span>
+          }
+          label={user ? user.displayName || user.email || "บัญชีของฉัน" : "เข้าสู่ระบบ"}
+          onClick={onAccount}
+        />
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+function MenuRow({
+  icon,
+  label,
+  onClick,
+  trailing,
+  active = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  trailing?: React.ReactNode;
+  active?: boolean;
+}) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-xl p-2 text-left transition hover:bg-bg-hover active:scale-[0.98]"
+    >
+      <span
+        className={`grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg border ${
+          active
+            ? "border-brand/40 bg-brand-soft text-brand"
+            : "border-line/70 bg-bg-card/60 text-ink-dim"
+        }`}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
+        {label}
+      </span>
+      {trailing}
+    </button>
   );
 }
 

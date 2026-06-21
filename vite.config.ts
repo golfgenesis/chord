@@ -103,18 +103,39 @@ export default defineConfig({
         display_override: ["fullscreen", "standalone", "minimal-ui"],
         orientation: "any",
         start_url: "/",
+        // Stable app identity for installs / Play Store. Matches the implicit
+        // default (start_url), so existing installed PWAs aren't re-identified.
+        id: "/",
         icons: [
+          // Raster icons first — Chrome's install + TWA/Bubblewrap require a
+          // PNG ≥512 (a lone SVG doesn't satisfy the Play Store launcher icon
+          // generation). 192 + 512 cover Lighthouse's installability check.
+          {
+            src: "/icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "any",
+          },
+          // Full-bleed dark square so Android's adaptive-icon mask never
+          // exposes transparent corners. Content sits in the center safe zone.
+          {
+            src: "/icon-maskable-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+          // SVG kept last for browsers that prefer a crisp scalable icon.
           {
             src: "/icon.svg",
             sizes: "any",
             type: "image/svg+xml",
             purpose: "any",
-          },
-          {
-            src: "/icon.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-            purpose: "maskable",
           },
         ],
       },

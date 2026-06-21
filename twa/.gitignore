@@ -1,0 +1,21 @@
+# Bubblewrap-generated Android project + build artifacts. Only twa-manifest.json
+# (the source config) is tracked; everything Bubblewrap regenerates is ignored.
+app/
+gradle/
+.gradle/
+build/
+gradlew
+gradlew.bat
+build.gradle
+settings.gradle
+gradle.properties
+local.properties
+store_icon.png
+*.aab
+*.apk
+*.idsig
+
+# NEVER commit signing keys.
+*.keystore
+*.jks
+android.keystore

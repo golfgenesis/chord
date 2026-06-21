@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { Playlist, RoomState, Song, Tab } from "./types";
+import type { Playlist, PlaylistTombstones, RoomState, Song, Tab } from "./types";
 import { loadJSON, loadLocal, saveJSON, saveLocal } from "./lib/persist";
 import { buildSearchIndex } from "./lib/search";
 import { decodeSongs } from "./lib/songsCodec";
@@ -43,6 +43,12 @@ let csMod: CsMod | null = null;
 let authMod: AuthMod | null = null;
 let firebaseLoading: Promise<void> | null = null;
 
+// init() runs from App's mount effect. React StrictMode (dev) and HMR can
+// fire that effect more than once; without this guard a second init() would
+// stack a duplicate popstate listener and a second auth subscription that
+// races the first over cloudSync's single active sync.
+let storeInitialized = false;
+
 function loadFirebase(): Promise<void> {
   if (!firebaseLoading) {
     firebaseLoading = Promise.all([
@@ -65,6 +71,11 @@ function loadFirebase(): Promise<void> {
 // Max items kept in the "latest opened" history. Caps the size of the
 // per-user Firestore doc so it can't grow forever.
 const LATEST_CAP = 30;
+
+// How long a delete-tombstone is honored before we forget it. Long enough that
+// any device that was offline at delete time will have synced back by then;
+// after that the tombstone is pruned so the doc doesn't grow without bound.
+const TOMBSTONE_TTL_MS = 1000 * 60 * 60 * 24 * 180; // 180 days
 
 function randomRoom() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -107,12 +118,98 @@ function normalizePlaylists(raw: unknown): Playlist[] {
   const arr = Array.isArray(raw) ? raw : Object.values(raw as object);
   return arr
     .filter((p): p is Partial<Playlist> => p != null && typeof p === "object")
-    .map((p) => ({
-      id: String(p.id ?? Math.random().toString(36).slice(2, 10)),
-      name: String(p.name ?? "Untitled"),
-      songIds: Array.isArray(p.songIds) ? p.songIds.filter((x) => typeof x === "number") : [],
-      createdAt: typeof p.createdAt === "number" ? p.createdAt : Date.now(),
-    }));
+    .map((p) => {
+      const createdAt = typeof p.createdAt === "number" ? p.createdAt : Date.now();
+      return {
+        id: String(p.id ?? Math.random().toString(36).slice(2, 10)),
+        name: String(p.name ?? "Untitled"),
+        songIds: Array.isArray(p.songIds)
+          ? p.songIds.filter((x) => typeof x === "number")
+          : [],
+        createdAt,
+        // Legacy rows (pre-updatedAt) fall back to createdAt so they still
+        // participate sanely in last-write-wins instead of defaulting to 0.
+        updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : createdAt,
+      };
+    });
+}
+
+// Coerce arbitrary wire data into a clean { id → deletedAt } map.
+function sanitizeTombstones(raw: unknown): PlaylistTombstones {
+  if (raw == null || typeof raw !== "object") return {};
+  const out: PlaylistTombstones = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Deterministic, order-stable merge of two playlist sets (local ↔ cloud).
+ * The unit of merge is a single playlist id, NOT the whole array — so a
+ * create on one device and a create on another both survive.
+ *
+ *   - tombstones: union, keeping the latest deletedAt per id.
+ *   - live playlists: per id, keep the copy with the newest `updatedAt`.
+ *   - a tombstone newer-or-equal to its live copy wins → playlist stays
+ *     deleted; a live copy edited AFTER its tombstone resurrects it (and the
+ *     stale tombstone is dropped).
+ *   - order: local order first, then any cloud-only ids appended — keeps the
+ *     user's current device arrangement stable across merges.
+ *   - tombstones older than TTL are pruned so the doc stays bounded.
+ *
+ * Idempotent and convergent: merge(x, x) == x, so re-running it (e.g. when the
+ * server echoes our own write back) produces no further changes.
+ */
+function mergePlaylistData(
+  localLive: Playlist[],
+  localTombs: PlaylistTombstones,
+  remoteLive: Playlist[],
+  remoteTombs: PlaylistTombstones,
+): { playlists: Playlist[]; tombstones: PlaylistTombstones } {
+  const tombs: PlaylistTombstones = { ...localTombs };
+  for (const [id, t] of Object.entries(remoteTombs)) {
+    tombs[id] = Math.max(tombs[id] ?? 0, t);
+  }
+
+  const newest = new Map<string, Playlist>();
+  const order: string[] = [];
+  for (const p of [...localLive, ...remoteLive]) {
+    const cur = newest.get(p.id);
+    if (!cur) order.push(p.id);
+    if (!cur || p.updatedAt > cur.updatedAt) newest.set(p.id, p);
+  }
+
+  const playlists: Playlist[] = [];
+  for (const id of order) {
+    const p = newest.get(id)!;
+    const deletedAt = tombs[id];
+    if (deletedAt != null && deletedAt >= p.updatedAt) continue; // stays deleted
+    if (deletedAt != null) delete tombs[id]; // edit newer than delete → resurrected
+    playlists.push(p);
+  }
+
+  const cutoff = Date.now() - TOMBSTONE_TTL_MS;
+  for (const [id, t] of Object.entries(tombs)) if (t < cutoff) delete tombs[id];
+
+  return { playlists, tombstones: tombs };
+}
+
+// Stable fingerprint of a playlist set, used to decide whether a freshly
+// merged local set carries anything the server doesn't have yet (→ push back).
+function playlistFingerprint(
+  live: Playlist[],
+  tombs: PlaylistTombstones,
+): string {
+  const l = [...live]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((p) => `${p.id}:${p.updatedAt}:${p.name}:${p.songIds.join(",")}`)
+    .join("|");
+  const t = Object.entries(tombs)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([id, ts]) => `${id}:${ts}`)
+    .join("|");
+  return `${l}##${t}`;
 }
 
 /**
@@ -123,9 +220,9 @@ function normalizePlaylists(raw: unknown): Playlist[] {
  *   - favorites: union (a song favorited on either device stays favorited)
  *   - latest: local-first dedup, capped at LATEST_CAP — the device the user
  *     is actively on is the most authoritative source for recency
- *   - playlists: keyed by id; on collision pick whichever has more songs
- *     (heuristic — assumes users add over time more often than they prune;
- *     can be refined later if it bites)
+ *   - playlists: per-id last-write-wins with delete-tombstones (see
+ *     mergePlaylistData) — a create survives, a delete propagates, neither
+ *     device clobbers the other.
  *   - roomCode: local wins (user just opened this device, so this is where
  *     they want to be — don't yank them to whatever room another device
  *     happens to be in)
@@ -153,20 +250,18 @@ function mergeUserData(
   }
   if (latest.length > LATEST_CAP) latest.length = LATEST_CAP;
 
-  const byId = new Map<string, Playlist>();
-  for (const p of remote.playlists ?? []) byId.set(p.id, p);
-  for (const p of local.playlists ?? []) {
-    const existing = byId.get(p.id);
-    if (!existing || existing.songIds.length < p.songIds.length) {
-      byId.set(p.id, p);
-    }
-  }
-  const playlists = [...byId.values()];
+  const { playlists, tombstones } = mergePlaylistData(
+    local.playlists ?? [],
+    sanitizeTombstones(local.playlistTombstones),
+    remote.playlists ?? [],
+    sanitizeTombstones(remote.playlistTombstones),
+  );
 
   return {
     favorites: [...favs],
     latest,
     playlists,
+    playlistTombstones: tombstones,
     roomCode: local.roomCode || remote.roomCode,
   };
 }
@@ -290,6 +385,11 @@ interface State {
   favorites: Set<number>;
   latest: number[]; // most recent first
   playlists: Playlist[];
+  // Delete-tombstones for playlists (id → deletedAt). Persisted alongside
+  // `playlists` and synced to the cloud doc when signed in so a delete made
+  // on one device doesn't get undone by a stale copy on another. Live-only
+  // playlists are what the UI renders; this never reaches the room layer.
+  playlistTombstones: PlaylistTombstones;
   // Playlists belonging to OTHER clients in the same room, keyed by their
   // clientId. Ephemeral — populated by the room subscription, wiped when
   // we leave / switch rooms. We don't persist this; on rejoin everyone
@@ -302,7 +402,7 @@ interface State {
   setTab: (t: Tab) => void;
   setRoomCode: (code: string, pushToCloud?: boolean) => void;
   randomizeRoom: () => void;
-  open: (song: Song, broadcast?: boolean) => void;
+  open: (song: Song, broadcast?: boolean, recordLatest?: boolean) => void;
   close: () => void;
   toggleFavorite: (id: number) => void;
   addToPlaylist: (playlistId: string, id: number) => void;
@@ -332,16 +432,22 @@ export const useApp = create<State>((set, get) => {
 
   // Persist + broadcast a new playlists array in one shot. Every mutation
   // (add/remove/reorder/create/rename/delete) ends with the same steps,
-  // so we centralize them here.
-  function commitPlaylists(playlists: Playlist[]) {
-    set({ playlists });
+  // so we centralize them here. Pass `tombstones` only when the delete-set
+  // changed (i.e. deletePlaylist) — other mutations leave it untouched.
+  function commitPlaylists(playlists: Playlist[], tombstones?: PlaylistTombstones) {
+    set(tombstones ? { playlists, playlistTombstones: tombstones } : { playlists });
     saveJSON("playlists", playlists);
+    if (tombstones) saveJSON("playlistTombstones", tombstones);
+    // The room layer only ever sees live playlists — tombstones are an
+    // account-sync concern, not a room concern.
     publishOwnPlaylists(playlists);
     // Push to cloud only when signed in — anon clients/{clientId} docs
-    // intentionally don't carry playlists (they're room-scoped only for
-    // anonymous users, matching pre-auth behavior).
+    // intentionally don't carry playlists (they're local + room-scoped only
+    // for anonymous users, as requested).
     if (get().user) {
-      csMod?.pushUpdate({ playlists });
+      csMod?.pushUpdate(
+        tombstones ? { playlists, playlistTombstones: tombstones } : { playlists },
+      );
     }
   }
 
@@ -373,9 +479,12 @@ export const useApp = create<State>((set, get) => {
   favorites: new Set(),
   latest: [],
   playlists: [],
+  playlistTombstones: {},
   othersPlaylists: {},
 
   async init() {
+    if (storeInitialized) return;
+    storeInitialized = true;
     // Persisted identity / room
     let clientId = loadLocal<string>("clientId", "");
     if (!clientId) {
@@ -447,17 +556,23 @@ export const useApp = create<State>((set, get) => {
     const songsPromise = fetch("/songs.bin")
       .then((r) => r.arrayBuffer())
       .then(decodeSongs);
-    const [favArr, latestRaw, playlists] = await Promise.all([
+    const [favArr, latestRaw, playlistsRaw, tombsRaw] = await Promise.all([
       loadJSON<number[]>("favorites", []),
       loadJSON<number[]>("latest", []),
-      loadJSON<Playlist[]>("playlists", []),
+      loadJSON<unknown>("playlists", []),
+      loadJSON<unknown>("playlistTombstones", {}),
     ]);
     const latest = latestRaw.slice(0, LATEST_CAP);
+    // Run local playlists through the normalizer too, so rows persisted by an
+    // older build (no `updatedAt`) get backfilled before any merge runs.
+    const playlists = normalizePlaylists(playlistsRaw);
+    const playlistTombstones = sanitizeTombstones(tombsRaw);
 
     set({
       favorites: new Set(favArr),
       latest,
       playlists,
+      playlistTombstones,
     });
 
     // Start loading the Firebase chunk (~425 KB) now — late enough that it
@@ -514,6 +629,14 @@ export const useApp = create<State>((set, get) => {
       source: import("./lib/cloudSync").SyncSource,
     ) => {
       if (!csMod) return;
+      // Re-arm the URL-wins guard for THIS source's first snapshot. Without
+      // it, whichever source emits first (often the anonymous client source
+      // during a cold sign-in, before auth restores) consumes the one-shot
+      // flag, and the later user-source snapshot then adopts a stale roomCode
+      // — yanking a freshly shared-link guest out of the room they just
+      // opened. Re-arming per source keeps "URL wins" true across the
+      // sign-out→sign-in source switch.
+      pendingUrlPush = urlForcedRoom;
       // Tear down old subscription before installing a new one. cloudSync's
       // teardown flushes any pending writes, so we don't lose a debounced
       // update that hadn't fired yet.
@@ -534,6 +657,7 @@ export const useApp = create<State>((set, get) => {
             favorites: [...get().favorites],
             latest: get().latest,
             playlists: get().playlists,
+            playlistTombstones: get().playlistTombstones,
             roomCode: get().roomCode,
           };
           if (remote == null) {
@@ -542,14 +666,17 @@ export const useApp = create<State>((set, get) => {
           } else {
             const merged = mergeUserData(localBlob, remote);
             const mergedPlaylists = merged.playlists ?? [];
+            const mergedTombs = merged.playlistTombstones ?? {};
             set({
               favorites: new Set(merged.favorites),
               latest: merged.latest,
               playlists: mergedPlaylists,
+              playlistTombstones: mergedTombs,
             });
             saveJSON("favorites", merged.favorites);
             saveJSON("latest", merged.latest);
             saveJSON("playlists", mergedPlaylists);
+            saveJSON("playlistTombstones", mergedTombs);
             // Re-publish into the current room so other members see the
             // post-merge playlists, not the stale pre-merge ones.
             const { sync: roomSync, clientId: myCid } = get();
@@ -572,36 +699,59 @@ export const useApp = create<State>((set, get) => {
         favorites: [...get().favorites],
         latest: get().latest,
         roomCode: get().roomCode,
-        ...(source.kind === "user" ? { playlists: get().playlists } : {}),
+        ...(source.kind === "user"
+          ? {
+              playlists: get().playlists,
+              playlistTombstones: get().playlistTombstones,
+            }
+          : {}),
       };
 
       unsubCloud = csMod.startCloudSync(source, initial, (remote) => {
         const remoteLatest = (remote.latest ?? []).slice(0, LATEST_CAP);
-        const patch: Partial<{
-          favorites: Set<number>;
-          latest: number[];
-          playlists: Playlist[];
-        }> = {
+        set({
           favorites: new Set(remote.favorites ?? []),
           latest: remoteLatest,
-        };
-        // Only adopt remote playlists when this is a user source — anon
-        // `clients/{clientId}` docs don't carry playlists.
-        if (source.kind === "user" && Array.isArray(remote.playlists)) {
-          patch.playlists = normalizePlaylists(remote.playlists);
-        }
-        set(patch);
+        });
         saveJSON("favorites", remote.favorites ?? []);
         saveJSON("latest", remoteLatest);
-        if (patch.playlists) {
-          saveJSON("playlists", patch.playlists);
-          // Re-publish my playlists into the room so guests see remote-driven
-          // edits made on the user's other device.
+
+        // Playlists only sync for a user source — anon `clients/{clientId}`
+        // docs don't carry them. Crucially we MERGE remote into local per-id
+        // (not overwrite): a create on another device, a delete that should
+        // stick, and a fresh local edit all survive. If the merge surfaces
+        // anything the server doesn't have yet, push the converged set back
+        // so every device ends up identical.
+        if (source.kind === "user") {
+          const remoteLive = normalizePlaylists(remote.playlists);
+          const remoteTombs = sanitizeTombstones(remote.playlistTombstones);
+          const { playlists: mergedLive, tombstones: mergedTombs } =
+            mergePlaylistData(
+              get().playlists,
+              get().playlistTombstones,
+              remoteLive,
+              remoteTombs,
+            );
+          set({ playlists: mergedLive, playlistTombstones: mergedTombs });
+          saveJSON("playlists", mergedLive);
+          saveJSON("playlistTombstones", mergedTombs);
+          // Re-publish my (live) playlists into the room so guests see
+          // remote-driven edits made on the user's other device.
           const { sync: roomSync, clientId: myCid } = get();
-          if (roomSync && myCid && patch.playlists) {
-            roomSync
-              .publishMyPlaylists(myCid, patch.playlists)
-              .catch(console.error);
+          if (roomSync && myCid) {
+            roomSync.publishMyPlaylists(myCid, mergedLive).catch(console.error);
+          }
+          // Converge the server toward the union. Guarded by a fingerprint so
+          // an echo of our own write (merge == remote) writes nothing —
+          // mergePlaylistData is idempotent, so this settles in one round.
+          if (
+            playlistFingerprint(mergedLive, mergedTombs) !==
+            playlistFingerprint(remoteLive, remoteTombs)
+          ) {
+            csMod?.pushUpdate({
+              playlists: mergedLive,
+              playlistTombstones: mergedTombs,
+            });
           }
         }
         if (pendingUrlPush) {
@@ -767,7 +917,7 @@ export const useApp = create<State>((set, get) => {
     get().setRoomCode(randomRoom());
   },
 
-  open(song, broadcast = true) {
+  open(song, broadcast = true, recordLatest = true) {
     // Prefetch the chord-sheet image BEFORE flipping `viewing`. Fullscreen
     // mounts on the next React tick; in the gap the browser has already
     // started (and often finished) the SW/cache lookup, so when the
@@ -781,13 +931,19 @@ export const useApp = create<State>((set, get) => {
     // local search context intact.
     if (broadcast && get().query) set({ query: "" });
     // push to "latest" (dedup, newest first, FIFO max 30 so the per-user
-    // Firestore doc stays bounded)
-    const cur = get().latest.filter((id) => id !== song.id);
-    cur.unshift(song.id);
-    if (cur.length > LATEST_CAP) cur.length = LATEST_CAP;
-    set({ latest: cur });
-    saveJSON("latest", cur);
-    csMod?.pushUpdate({ latest: cur });
+    // Firestore doc stays bounded). Skipped for passive auto-opens (a
+    // bandmate's remote pick reflected by useRoomSongAlert) so the band's
+    // picks don't flood THIS user's recently-opened history and cloud doc —
+    // only songs the user actually chose to open (a list tap, or tapping the
+    // NowPlaying banner) are recorded.
+    if (recordLatest) {
+      const cur = get().latest.filter((id) => id !== song.id);
+      cur.unshift(song.id);
+      if (cur.length > LATEST_CAP) cur.length = LATEST_CAP;
+      set({ latest: cur });
+      saveJSON("latest", cur);
+      csMod?.pushUpdate({ latest: cur });
+    }
     // Reflect the open song in the URL so deep-links / refresh / shared
     // notifications all land back on this exact view.
     pushUrl(get().roomCode, song.id);
@@ -849,10 +1005,11 @@ export const useApp = create<State>((set, get) => {
     // Each member edits only their OWN playlists. If `playlistId` isn't in
     // our local list it belongs to another member and is read-only here.
     if (!get().playlists.some((p) => p.id === playlistId)) return;
+    const now = Date.now();
     commitPlaylists(
       get().playlists.map((p) =>
         p.id === playlistId && !p.songIds.includes(id)
-          ? { ...p, songIds: [...p.songIds, id] }
+          ? { ...p, songIds: [...p.songIds, id], updatedAt: now }
           : p,
       ),
     );
@@ -860,10 +1017,11 @@ export const useApp = create<State>((set, get) => {
 
   removeFromPlaylist(playlistId, id) {
     if (!get().playlists.some((p) => p.id === playlistId)) return;
+    const now = Date.now();
     commitPlaylists(
       get().playlists.map((p) =>
         p.id === playlistId
-          ? { ...p, songIds: p.songIds.filter((x) => x !== id) }
+          ? { ...p, songIds: p.songIds.filter((x) => x !== id), updatedAt: now }
           : p,
       ),
     );
@@ -871,9 +1029,10 @@ export const useApp = create<State>((set, get) => {
 
   reorderPlaylist(playlistId, songIds) {
     if (!get().playlists.some((p) => p.id === playlistId)) return;
+    const now = Date.now();
     commitPlaylists(
       get().playlists.map((p) =>
-        p.id === playlistId ? { ...p, songIds: [...songIds] } : p,
+        p.id === playlistId ? { ...p, songIds: [...songIds], updatedAt: now } : p,
       ),
     );
   },
@@ -881,7 +1040,8 @@ export const useApp = create<State>((set, get) => {
   createPlaylist(name) {
     // Anyone in the room can create a playlist — it becomes theirs.
     const id = Math.random().toString(36).slice(2, 10);
-    const p: Playlist = { id, name, songIds: [], createdAt: Date.now() };
+    const now = Date.now();
+    const p: Playlist = { id, name, songIds: [], createdAt: now, updatedAt: now };
     commitPlaylists([...get().playlists, p]);
     set({ activePlaylistId: id });
     return id;
@@ -889,8 +1049,11 @@ export const useApp = create<State>((set, get) => {
 
   renamePlaylist(id, name) {
     if (!get().playlists.some((p) => p.id === id)) return;
+    const now = Date.now();
     commitPlaylists(
-      get().playlists.map((p) => (p.id === id ? { ...p, name } : p)),
+      get().playlists.map((p) =>
+        p.id === id ? { ...p, name, updatedAt: now } : p,
+      ),
     );
   },
 
@@ -898,9 +1061,12 @@ export const useApp = create<State>((set, get) => {
     if (!get().playlists.some((p) => p.id === id)) return;
     const prev = get();
     const playlists = prev.playlists.filter((p) => p.id !== id);
+    // Record a tombstone so the delete sticks across devices / re-login
+    // instead of a stale copy resurrecting it on the next merge.
+    const tombstones = { ...prev.playlistTombstones, [id]: Date.now() };
     const stillValidActive =
       prev.activePlaylistId === id ? null : prev.activePlaylistId;
-    commitPlaylists(playlists);
+    commitPlaylists(playlists, tombstones);
     set({
       activePlaylistId: resolveActivePlaylistId(playlists, stillValidActive, prev.tab),
     });

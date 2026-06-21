@@ -34,7 +34,10 @@ export function PlaylistPicker() {
         </button>
       </div>
 
-      {active && <PlaylistHeader entry={active} />}
+      {/* key by playlist id so switching the active playlist remounts the
+          header with fresh mode/draft state — otherwise a half-finished
+          rename carries over and can rename the wrong playlist. */}
+      {active && <PlaylistHeader key={active.playlist.id} entry={active} />}
 
       {creating && (
         <CreateSheet
