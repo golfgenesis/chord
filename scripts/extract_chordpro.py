@@ -20,7 +20,9 @@ Pipeline (per song id on chordtabs.in.th):
 USAGE (needs Python 3.11 with: easyocr torch pythainlp pillow requests numpy)
   py -3.11 scripts/extract_chordpro.py 48 100 2289      # specific ids
   py -3.11 scripts/extract_chordpro.py --range 1 200    # an id range
-  py -3.11 scripts/extract_chordpro.py 48 --gpu         # use CUDA if available
+  py -3.11 scripts/extract_chordpro.py --missing --limit 50  # next 50 un-extracted songs (re-run to continue)
+  py -3.11 scripts/extract_chordpro.py 48                # GPU auto: uses CUDA whenever it's available
+  py -3.11 scripts/extract_chordpro.py 48 --cpu         # force CPU even if CUDA is available
   py -3.11 scripts/extract_chordpro.py 48 --out data/chordpro --print
 
 Output: one <out>/<id>.txt per song (UTF-8 ChordPro). HTML+image are cached
@@ -333,7 +335,13 @@ def assemble(raw, ov=None, warn=None):
         txt = ' '.join(b['text'] for b in ir); iy = sum(b['yc'] for b in ir) / len(ir); low = txt.lower()
         if 'tune' in low or 'tone' in low: note = clean_note(txt); continue
         if any(abs(ry - iy) < 14 for ry in row_y): continue
-        is_instr = bool(re.search(r'intro|instru|outro|ending|coda|solo|interlud|bridge|verse|chorus|hook|times|dutro', low))
+        # A parenthesised section-repeat marker — "( *, ** )", "( *** )" — is NEVER a chord
+        # row. Force it to an instruction line so it isn't swallowed by a lyric that happens
+        # to sit 4-45px below it (the bug that silently dropped the upper "( *, ** )"). The
+        # "(" requirement keeps bare section headers ("*", "**", "***", which belong to their
+        # lyric line) from being promoted into spurious standalone marker rows.
+        is_marker = '(' in txt and bool(re.fullmatch(r'[()*#,\s\d.]*[*#][()*#,\s\d.]*', txt.strip()))
+        is_instr = is_marker or bool(re.search(r'intro|instru|outro|ending|coda|solo|interlud|bridge|verse|chorus|hook|times|dutro', low))
         if is_instr or not any(4 < (ry - iy) < 45 for ry in row_y):
             f = fmt_instr(txt, vocab)
             if f and re.search(r'\[|Intro|Instru|Outro|\(', f):
@@ -392,11 +400,17 @@ def main():
     ap.add_argument('--raw', default='data/chordpro-raw', help='cached OCR intermediates (the EXPENSIVE asset)')
     ap.add_argument('--overrides', default='data/chordpro-overrides', help='per-song manual corrections (JSON)')
     ap.add_argument('--cache', default='scripts/.chordpro_cache', help='html+image fetch cache')
-    ap.add_argument('--gpu', action='store_true', help='use CUDA if available (much faster)')
+    gpu_grp = ap.add_mutually_exclusive_group()
+    gpu_grp.add_argument('--gpu', dest='gpu', action='store_true', default=None,
+                         help='force CUDA on (default: auto — on whenever CUDA is available)')
+    gpu_grp.add_argument('--cpu', dest='gpu', action='store_false',
+                         help='force CPU even if CUDA is available')
+    ap.add_argument('--device', help="explicit torch device, overrides --gpu/--cpu/auto: 'cuda' / 'cpu' / 'mps'")
     ap.add_argument('--regen', action='store_true', help='rebuild ChordPro from cached raw/ + overrides — NO OCR (fast)')
     ap.add_argument('--check', action='store_true', help='regen AND flag suspect songs (off-vocab / no-chords / low-conf)')
     ap.add_argument('--force', action='store_true', help='re-OCR even if a cached raw/ exists')
     ap.add_argument('--missing', action='store_true', help='extract every song in data/results.json that has no ChordPro yet (for the post-sync one-shot)')
+    ap.add_argument('--limit', type=int, metavar='N', help='process at most N ids this run — chunk a big batch. With --missing, each run does the NEXT N un-extracted songs (already-done ids are skipped), so just re-run to continue.')
     ap.add_argument('--print', dest='show', action='store_true', help='also print each result')
     args = ap.parse_args()
 
@@ -407,6 +421,7 @@ def main():
         have = {int(f[:-4]) for f in os.listdir(args.out) if f.endswith('.txt') and f[:-4].isdigit()} if os.path.exists(args.out) else set()
         ids += [r['id'] for r in recs if r['id'] not in have]
         print(f'--missing: {len(ids)} songs without ChordPro yet')
+    if args.limit is not None: ids = ids[:max(0, args.limit)]   # chunk: take the first N
     os.makedirs(args.out, exist_ok=True); os.makedirs(args.raw, exist_ok=True)
 
     def load_ov(sid):
@@ -417,6 +432,7 @@ def main():
     if args.regen or args.check:
         if not ids:
             ids = sorted(int(f[:-5]) for f in os.listdir(args.raw) if f.endswith('.json'))
+            if args.limit is not None: ids = ids[:max(0, args.limit)]
         t0 = time.time(); flagged = []
         for sid in ids:
             rp = os.path.join(args.raw, f'{sid}.json')
@@ -438,9 +454,29 @@ def main():
     # ---- extract: OCR (expensive) → cache raw/ → assemble ----
     if not ids: ap.error('give song ids or --range START END (or use --regen)')
     os.makedirs(args.cache, exist_ok=True)
-    t0 = time.time(); print(f'loading EasyOCR (gpu={args.gpu}) …', flush=True)
-    readers = (easyocr.Reader(['en'], gpu=args.gpu, verbose=False),
-               easyocr.Reader(['th', 'en'], gpu=args.gpu, verbose=False))
+    # Resolve the OCR device. EasyOCR's `gpu` arg takes a bool OR a device string
+    # ('cuda'/'cpu'/'mps' — 1.7.x passes a non-bool straight through to self.device).
+    # NOTE: AMD-GPU-on-Windows via torch-directml was tried and is a DEAD END — EasyOCR's
+    # recognizer is an LSTM and torch-directml has no LSTM op (`aten::_thnn_fused_lstm_cell`
+    # is unsupported and its CPU fallback is broken), so recognition can't run on DirectML.
+    # Don't re-add a `dml` device here. GPU only helps on a real CUDA box (incl. cloud).
+    if args.device:                                       # 'cuda' / 'cpu' / 'mps'
+        gpu_arg = args.device; print(f'using device: {args.device}', flush=True)
+    elif args.gpu is None:                                # auto: use CUDA whenever it's there
+        try:
+            import torch
+            args.gpu = torch.cuda.is_available()
+            dev = torch.cuda.get_device_name(0) if args.gpu else None
+        except Exception:
+            args.gpu = False; dev = None
+        print(f"GPU auto-detect: {'on — ' + dev if args.gpu else 'off (no CUDA, using CPU)'}", flush=True)
+        gpu_arg = args.gpu
+    else:
+        gpu_arg = args.gpu
+
+    t0 = time.time(); print(f'loading EasyOCR (device={gpu_arg}) …', flush=True)
+    readers = (easyocr.Reader(['en'], gpu=gpu_arg, verbose=False),
+               easyocr.Reader(['th', 'en'], gpu=gpu_arg, verbose=False))
     print(f'  ready in {time.time() - t0:.0f}s\n', flush=True)
 
     ok = miss = fail = cached = 0; spent = 0.0

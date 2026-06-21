@@ -33,3 +33,7 @@ npm-debug.log*
 # Python
 __pycache__/
 *.pyc
+
+# Unused tesseract language model — the client loads the `eng` model from the
+# CDN at runtime (src/lib/chordOCR.ts), so this local ~5MB copy is never read.
+eng.traineddata

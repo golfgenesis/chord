@@ -21,19 +21,20 @@ re-OCR (and even then from the cached image, no re-fetch).
 ### npm scripts (package.json)
 
     npm run chordpro -- 48 100 2289     # OCR-extract these ids (or `-- --range 1 200`)
-    npm run chordpro:refresh            # ⭐ REFRESH: rebuild ChordPro for ALL converted songs
-                                        #    from cached raw — NO OCR (fast). After fixing a rule
-                                        #    bug (wrong chord / word / overlap), run this.
-    npm run chordpro:refresh -- 7 11    #    …or just specific ids
-    npm run chordpro:check              # refresh + flag suspect songs → data/chordpro/_flagged.tsv
-    npm run chordpro:build              # ⭐ ONE-SHOT: refresh ALL + rebuild songs.bin (ship it)
+    npm run chordpro:next               # ⭐ BATCH: OCR the next 50 un-extracted songs (--missing
+                                        #    --limit 50) + rebuild songs.bin. Re-run to continue;
+                                        #    already-done ids are skipped. Override N: `-- --limit 100`.
+    npm run chordpro:check              # regen ALL from cached raw + flag suspect songs →
+                                        #    data/chordpro/_flagged.tsv  (NO OCR, NO ship)
+    npm run chordpro:build              # ⭐ ONE-SHOT: regen ALL from cached raw + rebuild songs.bin
+                                        #    (ship it). Run this after fixing a rule bug or an override.
     npm run sync:chordpro               # ⭐ FULL ONE-SHOT: scrape new songs → OCR the new ones
                                         #    (--missing) → rebuild songs.bin
 
-Note: `npm run … -- <args>` appends args to the END of the script string, so pass ids only to
-single-command scripts (`chordpro`, `chordpro:refresh`, `chordpro:check`). For a targeted ship,
-run `chordpro:refresh -- <ids>` then `npm run data`. `npm run data` / `dev` / `build:full`
-already bundle ChordPro into the payload automatically.
+Note: `npm run … -- <args>` appends args to the END of the script string, so it only works on
+single-command scripts (`chordpro`, `chordpro:check`). To regen specific ids WITHOUT shipping
+(e.g. after fixing one override), call python directly: `py -3.11 scripts/extract_chordpro.py --regen 7 11`.
+`npm run data` / `dev` / `build:full` already bundle ChordPro into the payload automatically.
 
 ### Direct (python)
 

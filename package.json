@@ -16,7 +16,7 @@
     "check": "py scripts/check_sync.py",
     "check:clean": "py scripts/check_sync.py --delete-orphans",
     "chordpro": "py -3.11 scripts/extract_chordpro.py",
-    "chordpro:refresh": "py -3.11 scripts/extract_chordpro.py --regen",
+    "chordpro:next": "py -3.11 scripts/extract_chordpro.py --missing --limit 50 && node scripts/build-data.mjs",
     "chordpro:check": "py -3.11 scripts/extract_chordpro.py --check",
     "chordpro:build": "py -3.11 scripts/extract_chordpro.py --regen && node scripts/build-data.mjs",
     "sync:chordpro": "py scripts/sync.py && py -3.11 scripts/extract_chordpro.py --missing && node scripts/build-data.mjs"

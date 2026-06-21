@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ParsedSheet, ChordSeg } from "../lib/chordpro";
 import { preferFlatsForKey, transposeChord } from "../lib/musicTheory";
 
@@ -10,6 +10,24 @@ const CHORD_FONT = '"Inter", system-ui, sans-serif';
 // One chord size everywhere (Intro/Instru rows AND the labels above lyrics) so chords
 // never look bigger on one line than another.
 const CHORD_EM = "0.82em";
+
+// Adaptive vertical gaps. The inter-line spacing is `BASE * var(--gapK)`, and
+// `--gapK` is computed per song so the sheet fills the screen WITHOUT scrolling
+// when it reasonably can. GAP_MIN is the floor: below this, lines read as
+// cramped, so instead of compressing further we let the page scroll.
+const GAP_MIN = 0.4;
+
+// Nearest scrollable ancestor — its clientHeight is the height the sheet has to
+// fill (in fit mode the sheet sits inside Fullscreen's overflow-y-auto column).
+function scrollParentOf(el: HTMLElement | null): HTMLElement | null {
+  let p = el?.parentElement ?? null;
+  while (p) {
+    const oy = getComputedStyle(p).overflowY;
+    if (oy === "auto" || oy === "scroll") return p;
+    p = p.parentElement;
+  }
+  return null;
+}
 
 interface Props {
   sheet: ParsedSheet;
@@ -44,27 +62,53 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
   const outerRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
+  const [gapK, setGapK] = useState(1);
   const [boxH, setBoxH] = useState<number | undefined>(undefined);
 
   // Measurement only ever setState from async callbacks (rAF / ResizeObserver
   // / fonts.ready) — never synchronously in the effect body. When !fit the
-  // render ignores `scale`/`boxH` entirely, so there's nothing to reset here.
+  // render ignores `scale`/`boxH`/`gapK` entirely, so there's nothing to reset.
   useLayoutEffect(() => {
     if (!fit) return;
     const outer = outerRef.current;
     const inner = innerRef.current;
     if (!outer || !inner) return;
     const measure = () => {
+      // 1) Width fit. Content width is gap-independent, but pin --gapK to 1
+      //    first so the height reads below are taken at the known extreme.
+      inner.style.setProperty("--gapK", "1");
       const natW = inner.scrollWidth;
       const availW = outer.clientWidth;
       const s = natW > availW && natW > 0 ? availW / natW : 1;
-      setScale(s);
-      // boxH is the OUTER height (border-box) so it must include the outer's own
-      // vertical padding (py-6) — otherwise the scaled inner + padding overflows
-      // and `overflow:hidden` clips the last line(s).
+
+      // 2) Vertical gap fit. Sheet height is LINEAR in --gapK (gaps are the
+      //    only thing that changes), so measure the two extremes and solve for
+      //    the gapK that makes the scaled sheet just fit the scroll viewport.
+      //    H(k) = H0 + k*(H1-H0); want H(k)*s + padY <= availH.
+      const hFull = inner.scrollHeight; // --gapK = 1
+      inner.style.setProperty("--gapK", "0");
+      const hTight = inner.scrollHeight; // --gapK = 0 (gaps collapsed)
       const cs = getComputedStyle(outer);
       const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-      setBoxH(inner.scrollHeight * s + padY);
+      const sp = scrollParentOf(outer);
+      const availH = sp ? sp.clientHeight : window.innerHeight;
+
+      let k = 1;
+      if (hFull > hTight + 0.5) {
+        const want = ((availH - padY) / s - hTight) / (hFull - hTight);
+        k = Math.max(GAP_MIN, Math.min(1, want));
+      }
+      inner.style.setProperty("--gapK", String(k));
+
+      // boxH is the OUTER height (border-box) so it must include the outer's own
+      // vertical padding (py-6) — otherwise the scaled inner + padding overflows
+      // and `overflow:hidden` clips the last line(s). When the song is still
+      // taller than availH at the gap floor, boxH > availH and the parent
+      // scrolls — exactly the intended fallback.
+      const hPicked = hTight + k * (hFull - hTight);
+      setScale(s);
+      setGapK(k);
+      setBoxH(hPicked * s + padY);
     };
     const raf = requestAnimationFrame(measure);
     const ro = new ResizeObserver(measure);
@@ -95,7 +139,10 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
           // true content width to measure against.
           width: fit ? "max-content" : undefined,
           maxWidth: fit ? "none" : undefined,
-        }}
+          // Drives every inter-line gap below. 1 in reader mode (full spacing);
+          // the measured fit value when fitting to screen.
+          ["--gapK"]: fit ? gapK : 1,
+        } as CSSProperties}
       >
         {sheet.meta.note && (
           <p
@@ -111,7 +158,13 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
 
         {sheet.lines.map((line, i) => {
           if (line.kind === "blank") {
-            return <div key={i} style={{ height: "1.15em" }} aria-hidden="true" />;
+            return (
+              <div
+                key={i}
+                style={{ height: "calc(1.15em * var(--gapK, 1))" }}
+                aria-hidden="true"
+              />
+            );
           }
           if (line.kind === "chords") {
             return (
@@ -123,7 +176,7 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
                   color: dim,
                   fontSize: CHORD_EM,
                   fontWeight: 600,
-                  margin: "0.5em 0 0.3em",
+                  margin: "calc(0.5em * var(--gapK, 1)) 0 calc(0.3em * var(--gapK, 1))",
                   letterSpacing: "0.01em",
                 }}
               >
@@ -172,7 +225,13 @@ function LyricLine({
   return (
     <div
       style={{
-        margin: hasChord ? "0.55em 0 0.14em" : "0.14em 0",
+        // Gaps scale with --gapK so the sheet can tighten to fit the screen.
+        // The chord label lives INSIDE the column (block above its word), not in
+        // this margin, so compressing the margin never lets a chord collide with
+        // the line above — and lineHeight 1.2 keeps the text itself readable.
+        margin: hasChord
+          ? "calc(0.55em * var(--gapK, 1)) 0 calc(0.14em * var(--gapK, 1))"
+          : "calc(0.14em * var(--gapK, 1)) 0",
         whiteSpace: fit ? "nowrap" : "normal",
         wordBreak: "normal",
         lineHeight: 1.2,
@@ -204,7 +263,7 @@ function LyricLine({
               {tx(seg.chord)}
             </span>
           )}
-          <span style={{ display: "block" }}>{seg.text || " "}</span>
+          <span style={{ display: "block" }}>{seg.text || " "}</span>
         </span>
       ))}
     </div>
