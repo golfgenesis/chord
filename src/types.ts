@@ -1,6 +1,9 @@
 export interface Song {
   id: number;
   name: string;
+  /** Inline ChordPro text (chords-as-text). Present only for songs the offline
+   *  pipeline has converted; when set, the app renders text instead of the image. */
+  cp?: string;
 }
 
 export interface RoomState {

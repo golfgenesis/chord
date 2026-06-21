@@ -10,9 +10,12 @@ import {
 import { loadLocal, saveLocal } from "../lib/persist";
 import { useWakeLock } from "../hooks/useWakeLock";
 import { ChordOverlay } from "./ChordOverlay";
+import { ChordSheet } from "./ChordSheet";
 import { NextSongDrawer } from "./NextSongDrawer";
 import type { Song } from "../types";
 import { runChordOCR, type OCRResult } from "../lib/chordOCR";
+import { parseChordpro } from "../lib/chordpro";
+import { getSampleChordpro } from "../lib/sampleChordpro";
 import { detectKey, type KeyEstimate } from "../lib/keyDetect";
 import { preferFlatsForKey, relativeMajorTonic } from "../lib/musicTheory";
 
@@ -46,6 +49,11 @@ const OCR_DEBUG_KEY = "ocr-debug";
 // fit-width, vertically-scrollable one, and auto-scrolls. The mode persists
 // globally (a viewing preference, like invert).
 const SCROLL_MODE_KEY = "scroll-mode";
+// Only an owner (signed in with one of these emails) may flip a text-mode song BACK to
+// the original image. Everyone else always gets the OCR'd text version when one exists.
+// Soft UX gate, not security — the chord data isn't secret.
+const OWNER_EMAILS = ["blackpearl_golf@hotmail.com", "blackpearlgolf@gmail.com"];
+const OWNER_IMAGE_KEY = "owner-image-mode";
 // Auto-scroll pacing: glide from top to bottom over this many seconds, so the
 // speed adapts to each sheet's height (a taller sheet scrolls proportionally
 // faster to finish in the same time). Tuned to a typical song's length — there's
@@ -58,10 +66,65 @@ export function Fullscreen() {
   const open = useApp((s) => s.open);
   const invertImages = useApp((s) => s.invertImages);
   const toggleInvertImages = useApp((s) => s.toggleInvertImages);
+
+  // Owner-only escape hatch: view the original IMAGE instead of the OCR'd text.
+  const user = useApp((s) => s.user);
+  const isOwner = !!user?.email && OWNER_EMAILS.includes(user.email.toLowerCase());
+  const [imageMode, setImageMode] = useState(
+    () => localStorage.getItem(OWNER_IMAGE_KEY) === "1",
+  );
+  const toggleImageMode = () =>
+    setImageMode((v) => {
+      const next = !v;
+      localStorage.setItem(OWNER_IMAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+
+  // Text-mode chord sheet (ChordPro). Source priority: a hand-authored override
+  // (sampleChordpro) wins, else the `cp` shipped in the song payload (from the
+  // offline pipeline). When neither exists the song keeps the image + OCR flow.
+  const songs = useApp((s) => s.songs);
+  const sheetSrc = useMemo(() => {
+    if (!song) return null;
+    return (
+      getSampleChordpro(song.id) ??
+      song.cp ??
+      songs.find((s) => s.id === song.id)?.cp ??
+      null
+    );
+  }, [song, songs]);
+  const parsedSheet = useMemo(
+    () => (sheetSrc ? parseChordpro(sheetSrc) : null),
+    [sheetSrc],
+  );
+  // Text mode whenever a ChordPro source exists — except the owner can force the
+  // original image via the header toggle. Non-owners always get the text version.
+  const textMode = parsedSheet != null && !(isOwner && imageMode);
+  const textDetectedKey = useMemo(
+    () => (parsedSheet ? detectKey(parsedSheet.chords) : null),
+    [parsedSheet],
+  );
+  // Default source key for text mode, derived (not persisted): the {key:}
+  // directive wins, else chord detection above the confidence floor, else C.
+  // Deterministic from the sheet, so re-deriving on every open is stable —
+  // which is why text mode needs no auto-fill effect the way the image path
+  // does (it can't re-run OCR cheaply, so it has to cache its guess).
+  const textDefaultKey = useMemo(() => {
+    if (!parsedSheet) return 0;
+    if (parsedSheet.sourceKey != null) return parsedSheet.sourceKey;
+    if (
+      textDetectedKey &&
+      textDetectedKey.confidence >= AUTO_DETECT_CONFIDENCE_MIN
+    )
+      return relativeMajorTonic(textDetectedKey.tonic, textDetectedKey.mode);
+    return 0;
+  }, [parsedSheet, textDetectedKey]);
+
   // Track which song id has finished loading. `loaded` is derived, so it
   // automatically resets to false when `song.id` changes — no effect needed.
+  // Text mode has no image to wait on, so it counts as loaded immediately.
   const [loadedId, setLoadedId] = useState<number | null>(null);
-  const loaded = song != null && loadedId === song.id;
+  const loaded = textMode || (song != null && loadedId === song.id);
   // Same shape for the error path. `<img onError>` sets errorId; the
   // derived `errored` flips back to false automatically the moment the
   // user switches songs (because errorId !== new song.id).
@@ -149,8 +212,11 @@ export function Fullscreen() {
   // most users only transpose a handful of songs.
   const [transposeMap, setTransposeMap] = useState<TransposeMap>(() => loadTransposeMap());
   const currentEntry = song ? transposeMap[String(song.id)] : undefined;
-  const fromKey = currentEntry?.from ?? 0;
-  const toKey = currentEntry?.to ?? 0;
+  // Text mode KNOWS its source key (declared in the sheet), so it's
+  // authoritative — no OCR guess to override. The user only picks a target.
+  // Image mode keeps the override flow (OCR can be wrong).
+  const fromKey = textMode ? textDefaultKey : currentEntry?.from ?? 0;
+  const toKey = currentEntry?.to ?? (textMode ? textDefaultKey : 0);
   const signedDelta = useMemo(() => {
     const d = ((toKey - fromKey) % 12 + 12) % 12;
     return d > 6 ? d - 12 : d;
@@ -195,12 +261,14 @@ export function Fullscreen() {
     if (!song) return;
     const id = String(song.id);
     setTransposeMap((prev) => {
-      const from = prev[id]?.from ?? 0;
+      // In text mode the source is the sheet's declared key, not whatever a
+      // stale entry holds — reset must land delta back at exactly that.
+      const from = textMode ? textDefaultKey : prev[id]?.from ?? 0;
       const next: TransposeMap = { ...prev, [id]: { from, to: from } };
       saveTransposeMap(next);
       return next;
     });
-  }, [song]);
+  }, [song, textMode, textDefaultKey]);
 
   // Kick off OCR lazily when the panel is open and we have a loaded image.
   // The result is cached in IndexedDB by chordOCR.ts, so subsequent visits
@@ -512,7 +580,9 @@ export function Fullscreen() {
         <div className="flex shrink-0 items-center gap-1.5 sm:contents">
           <DetectionChip
             status={
-              currentOcrError
+              textMode
+                ? "ready"
+                : currentOcrError
                 ? "error"
                 : currentOcr
                 ? "ready"
@@ -520,9 +590,13 @@ export function Fullscreen() {
             }
             fromKey={fromKey}
             toKey={toKey}
-            detectedKey={currentOcr?.detectedKey ?? null}
+            detectedKey={
+              textMode ? textDetectedKey : currentOcr?.detectedKey ?? null
+            }
             chordCount={
-              currentOcr
+              textMode
+                ? parsedSheet!.chords.length
+                : currentOcr
                 ? currentOcr.result.chords.reduce(
                     (n, c) => n + (c.sequence?.length ?? 1),
                     0,
@@ -535,7 +609,31 @@ export function Fullscreen() {
             onReset={resetTranspose}
             ocrDebug={ocrDebug}
             onToggleOcrDebug={toggleOcrDebug}
+            sourceLocked={textMode}
           />
+          {isOwner && parsedSheet != null && (
+            <button
+              onClick={toggleImageMode}
+              className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
+                imageMode
+                  ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
+                  : "border-white/[0.12] bg-white/[0.06] text-white/80 hover:border-white/20 hover:bg-white/[0.12]"
+              }`}
+              aria-label={imageMode ? "กลับไปดูแบบข้อความ (OCR)" : "ดูแบบรูปต้นฉบับ"}
+              aria-pressed={imageMode}
+              title={
+                imageMode
+                  ? "กำลังดูรูปต้นฉบับ — แตะเพื่อกลับเป็นข้อความ OCR (เฉพาะเจ้าของเห็นปุ่มนี้)"
+                  : "ดูรูปต้นฉบับแทนข้อความ OCR (เฉพาะเจ้าของเห็นปุ่มนี้)"
+              }
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-[18px]">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={toggleScrollMode}
             className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
@@ -597,7 +695,9 @@ export function Fullscreen() {
       <div
         ref={scrollRef}
         className={`relative min-h-0 flex-1 ${
-          scrollMode ? "overflow-y-auto overflow-x-hidden" : "overflow-hidden"
+          scrollMode || textMode
+            ? "overflow-y-auto overflow-x-hidden"
+            : "overflow-hidden"
         } ${
           loaded
             ? invertImages
@@ -615,7 +715,7 @@ export function Fullscreen() {
         // Tapping the backdrop closes only in fit mode. In read mode exiting is
         // via the header X, so a stray tap while reading never kicks you out.
         onClick={() => {
-          if (!scrollMode) close();
+          if (!scrollMode && !textMode) close();
         }}
         // Hand-scrolling coexists with the glide: any touch/move/wheel pushes
         // `resumeAt` ~0.6s ahead, so the loop follows the user while they're
@@ -688,7 +788,21 @@ export function Fullscreen() {
             overlay coordinates resolve against the same box. In read mode the
             wrapper is height-auto (= image height) so the container can scroll
             the full sheet; otherwise it's h-full for object-contain centering. */}
-        <div className={`relative w-full ${scrollMode ? "" : "h-full"}`}>
+        <div
+          className={`relative w-full ${
+            scrollMode || textMode ? "" : "h-full"
+          }`}
+        >
+          {textMode ? (
+            <ChordSheet
+              sheet={parsedSheet!}
+              fromKey={fromKey}
+              toKey={toKey}
+              invert={invertImages}
+              fit={!scrollMode}
+            />
+          ) : (
+            <>
           <img
             // Bump the key on retry to force React to remount — same src
             // would otherwise re-serve the failed entry from the in-memory
@@ -761,6 +875,8 @@ export function Fullscreen() {
               invert={invertImages}
               debug={ocrDebug}
             />
+          )}
+            </>
           )}
         </div>
       </div>
@@ -888,6 +1004,7 @@ function DetectionChip({
   onReset,
   ocrDebug,
   onToggleOcrDebug,
+  sourceLocked,
 }: {
   status: "loading" | "ready" | "error";
   fromKey: number;
@@ -900,6 +1017,10 @@ function DetectionChip({
   onReset: () => void;
   ocrDebug: boolean;
   onToggleOcrDebug: () => void;
+  // Text-mode sheet: the source key is declared in the sheet (no OCR guess),
+  // so the source override grid + debug overlay toggle are hidden and the
+  // copy reflects "transpose by music theory" instead of "OCR detected".
+  sourceLocked: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement>(null);
@@ -1024,10 +1145,18 @@ function DetectionChip({
                 width: POPOVER_WIDTH,
               }}
             >
-              {/* Analysis summary line — visible at the top so the user
-                  always knows how much to trust the auto-detected source.
-                  Errors swap in a redder message + invite manual input. */}
-              {isError ? (
+              {/* Analysis summary line. Text-mode sheets state the key came
+                  from the sheet and transposition is pure music theory; image
+                  mode shows OCR's detected-chord count + confidence. */}
+              {sourceLocked ? (
+                <div className="flex items-baseline justify-between gap-2 text-[11px]">
+                  <span className="text-ink-dim">
+                    เปลี่ยนคีย์ตามทฤษฎีดนตรี ·{" "}
+                    <span className="font-semibold text-ink">{chordCount}</span>{" "}
+                    คอร์ด
+                  </span>
+                </div>
+              ) : isError ? (
                 <div className="text-[11.5px] leading-snug text-danger/90">
                   วิเคราะห์รูปไม่สำเร็จ — กรอกคีย์ต้นฉบับเอง
                 </div>
@@ -1047,18 +1176,31 @@ function DetectionChip({
                 </div>
               )}
 
-              {/* SOURCE picker — the musician's manual override for OCR's
-                  guess. Shown above the target picker so it reads as the
-                  starting point of the transposition. Picking here keeps
-                  the popover open; the user almost always follows up with
-                  a target. */}
-              <KeyGrid
-                heading="คีย์ต้นฉบับ"
-                hint={isError ? "ไม่มีการตรวจจับ — เลือกเอง" : "OCR เดาให้แล้ว · กดเพื่อแก้"}
-                value={fromKey}
-                onPick={pickFrom}
-                accent="muted"
-              />
+              {/* SOURCE key. Text mode: read-only — the key is declared in the
+                  sheet, there's nothing to guess. Image mode: an editable grid
+                  to override OCR's guess (kept open after a pick so the user
+                  can follow up with a target). */}
+              {sourceLocked ? (
+                <div className="flex items-baseline justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+                    คีย์ต้นฉบับ
+                  </span>
+                  <span className="text-[13px] font-bold tabular-nums text-ink">
+                    {keyDisplay(fromKey)}
+                    <span className="ml-1.5 text-[10.5px] font-medium text-ink-dim/70">
+                      จากแผ่นโน้ต
+                    </span>
+                  </span>
+                </div>
+              ) : (
+                <KeyGrid
+                  heading="คีย์ต้นฉบับ"
+                  hint={isError ? "ไม่มีการตรวจจับ — เลือกเอง" : "OCR เดาให้แล้ว · กดเพื่อแก้"}
+                  value={fromKey}
+                  onPick={pickFrom}
+                  accent="muted"
+                />
+              )}
 
               {/* TARGET picker — the user's "เปลี่ยนเป็นคีย์อะไร" choice.
                   Picking here applies the transpose and closes the popover. */}
@@ -1075,26 +1217,29 @@ function DetectionChip({
                   caught (especially the Intro / Instru / Outro section
                   rows that historically had unreliable detection). Kept
                   in the popover instead of the main header so it doesn't
-                  clutter the toolbar. */}
-              <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
-                <span className="text-[11px] font-medium text-ink-dim">
-                  แสดงคอร์ดที่ตรวจเจอ (debug)
-                </span>
-                <button
-                  onClick={onToggleOcrDebug}
-                  role="switch"
-                  aria-checked={ocrDebug}
-                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
-                    ocrDebug ? "bg-brand" : "bg-white/15"
-                  }`}
-                >
-                  <span
-                    className={`inline-block size-4 transform rounded-full bg-white transition ${
-                      ocrDebug ? "translate-x-[18px]" : "translate-x-0.5"
+                  clutter the toolbar. Hidden in text mode — it only drives
+                  the image OCR overlay. */}
+              {!sourceLocked && (
+                <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+                  <span className="text-[11px] font-medium text-ink-dim">
+                    แสดงคอร์ดที่ตรวจเจอ (debug)
+                  </span>
+                  <button
+                    onClick={onToggleOcrDebug}
+                    role="switch"
+                    aria-checked={ocrDebug}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
+                      ocrDebug ? "bg-brand" : "bg-white/15"
                     }`}
-                  />
-                </button>
-              </div>
+                  >
+                    <span
+                      className={`inline-block size-4 transform rounded-full bg-white transition ${
+                        ocrDebug ? "translate-x-[18px]" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
 
               {transposeActive && (
                 <div className="-mb-0.5 border-t border-white/[0.06] pt-2.5">

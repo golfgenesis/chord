@@ -1,8 +1,12 @@
 # Bulk data — kept locally, not in repo
 /images
 /images-webp
-/data
+/data/*
 /logs
+/scripts/.chordpro_cache
+# …but DO commit the hand-made per-song chord corrections (small, precious, versioned).
+# (data/chordpro/ = build output, data/chordpro-raw/ = bulky OCR cache → both stay ignored.)
+!/data/chordpro-overrides/
 
 # Local-only
 .env

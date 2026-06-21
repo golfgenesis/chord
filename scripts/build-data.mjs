@@ -49,6 +49,19 @@ if (!fs.existsSync(SRC)) {
 }
 const records = JSON.parse(fs.readFileSync(SRC, "utf8"));
 
+// ChordPro text (chords-as-text replacement for the image) produced offline by
+// scripts/extract_chordpro.py → data/chordpro/<id>.txt. When a song has one, we
+// ship it inline in the payload as `cp` so the client renders text + transposes
+// instead of fetching the image. Missing → song keeps the image flow.
+const CHORDPRO_DIR = path.join(PROJECT_ROOT, "data", "chordpro");
+const chordpro = new Map();
+if (fs.existsSync(CHORDPRO_DIR)) {
+  for (const f of fs.readdirSync(CHORDPRO_DIR)) {
+    const m = f.match(/^(\d+)\.txt$/);
+    if (m) chordpro.set(Number(m[1]), fs.readFileSync(path.join(CHORDPRO_DIR, f), "utf8"));
+  }
+}
+
 // Case-insensitive collision detection (matches Windows + Python logic)
 const counts = new Map();
 for (const r of records) {
@@ -60,8 +73,10 @@ const slim = records.map((r) => {
   const base = cleanName(r.alt);
   const dup = counts.get(base.toLowerCase()) > 1;
   const name = dup ? `${base}_${r.id}` : base;
-  return { id: r.id, name };
+  const cp = chordpro.get(r.id);
+  return cp ? { id: r.id, name, cp } : { id: r.id, name };
 });
+console.log(`build-data: ${slim.length} songs, ${chordpro.size} with ChordPro text`);
 
 const json = Buffer.from(JSON.stringify(slim), "utf8");
 const gz = zlib.gzipSync(json, { level: 9 });
