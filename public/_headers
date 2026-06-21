@@ -1,6 +1,21 @@
 # Cloudflare Pages / Netlify response-header rules.
 # Format: https://developers.cloudflare.com/pages/configuration/headers/
 
+# The service worker and the app shell must NEVER be served stale. Browsers
+# (Chrome) already bypass the HTTP cache for the SW script most of the time,
+# but iOS Safari / standalone PWAs will happily reuse a cached sw.js / index
+# for hours — so a deploy never reaches them, and the half-applied transition
+# is what froze installed PWAs on the boot splash. `no-cache` = store but
+# always revalidate, so every launch picks up a new SW + fresh shell. Hashed
+# assets under /assets/* keep their default immutable caching (filename
+# changes per build), so this costs one tiny conditional request per launch.
+/sw.js
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+
 /*
   # Allow opening popup windows to cross-origin URLs AND keep an opener
   # reference so we can detect when they close. Required for Firebase

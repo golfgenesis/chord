@@ -57,14 +57,25 @@ registerSW({
   },
 });
 
-// Auto-reload the page when a new service worker takes control so a
-// freshly-deployed SW becomes effective without manual hard-refresh.
-// Pairs with the update triggers above: those find the new SW, this
-// flips the page over to it the moment it activates.
+// Auto-reload the page when a new service worker REPLACES the one that was
+// already controlling this page, so a freshly-deployed SW becomes effective
+// without a manual hard-refresh. Pairs with the update triggers above: those
+// find the new SW, this flips the page over to it the moment it activates.
+//
+// `controllerAtLoad` guard — the bug it fixes:
+//   On an iOS home-screen PWA (standalone), relaunching often starts the page
+//   UNCONTROLLED; the SW then claims it and fires `controllerchange` even
+//   though nothing was upgraded. The old code reloaded on that first claim,
+//   and because each relaunch repeats the pattern (plus the visibilitychange
+//   update-poll above), it spun into an endless reload — the app froze on the
+//   boot splash and never mounted. We now reload ONLY when a controller was
+//   ALREADY present at page load (a genuine old→new SW handover); the initial
+//   claim of a fresh client is a no-op. `refreshing` keeps it a one-shot.
 if ("serviceWorker" in navigator) {
+  const controllerAtLoad = navigator.serviceWorker.controller;
   let refreshing = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (refreshing) return;
+    if (refreshing || !controllerAtLoad) return;
     refreshing = true;
     window.location.reload();
   });

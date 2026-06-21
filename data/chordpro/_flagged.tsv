@@ -1,0 +1,7 @@
+5	off-vocab chord 'A' | off-vocab chord 'A' | off-vocab chord 'A' | off-vocab chord 'A' | off-vocab chord 'A' | off-vocab chord 'A' | off-vocab chord 'Gb' | off-vocab chord 'Gb' | low-confidence Ab,Cm
+11	off-vocab chord 'B' | low-confidence C,G
+48	off-vocab chord 'G' | low-confidence G
+50	low-confidence Amaj7,C,C#m,E,F
+777	low-confidence Em7
+1500	off-vocab chord 'Eb' | off-vocab chord 'Abmaj' | off-vocab chord 'G' | off-vocab chord 'Eb' | off-vocab chord 'Abmaj' | off-vocab chord 'G' | off-vocab chord 'Abmaj9' | off-vocab chord 'Abmaj' | off-vocab chord 'G' | off-vocab chord 'Eb' | off-vocab chord 'Abmaj7' | off-vocab chord 'Abmaj7' | off-vocab chord 'Abmaj7' | off-vocab chord 'Abmaj7' | off-vocab chord 'Abmaj' | off-vocab chord 'G' | off-vocab chord 'Abmaj9' | off-vocab chord 'Bmaj' | off-vocab chord 'G' | off-vocab chord 'Eb' | off-vocab chord 'Abmaj9' | off-vocab chord 'Abmaj9' | off-vocab chord 'Abmaj9' | off-vocab chord 'Abmaj9' | off-vocab chord 'G'
+2289	off-vocab chord 'Fm' | off-vocab chord 'Fm' | low-confidence D,Dmaj7,G
