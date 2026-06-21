@@ -54,7 +54,7 @@ export interface OCRResult {
 
 // Bump when CHORD_REGEX, NORMALIZE_MAP, or whitelist materially changes —
 // caches recognised under an older version will be ignored.
-const OCR_VERSION = 17;
+const OCR_VERSION = 19;
 
 // Section-header labels that Tesseract occasionally glues onto the adjacent
 // chord token when kerning is tight ("Intro" + "D" → "IntroD", "BridgeD/G/Em",
@@ -135,6 +135,21 @@ function normalizeRaw(raw: string): string {
   // resolve to the same chord.
   if (out.length > 0 && out[0] >= "a" && out[0] <= "g") {
     out = out[0].toUpperCase() + out.slice(1);
+  }
+  // Tesseract frequently doubles a bold, isolated capital chord letter,
+  // emitting "Cc" / "Gg" / "Dd" for a single "C" / "G" / "D" (a phantom
+  // inner stroke read as a lowercase twin). Collapse that artifact so the
+  // length-2 exact-match snap downstream doesn't silently drop the chord —
+  // on real sheets this loses a large share of the standalone tonic chords.
+  // "Bb" is exempt: there the trailing 'b' is a flat, not a doubled letter.
+  if (
+    out.length === 2 &&
+    out !== "Bb" &&
+    out[0] >= "A" &&
+    out[0] <= "G" &&
+    out[1].toUpperCase() === out[0]
+  ) {
+    out = out[0];
   }
   return out;
 }
@@ -328,10 +343,23 @@ function snapWordMaybeGlued(
       const widthFull = bbox.x1 - bbox.x0;
       const firstSpan = spans[0];
       const lastSpan = spans[spans.length - 1];
+      // Char-index → pixel mapping understates how far LEFT the first chord
+      // sits. The OCR word collapses the printed spaces around separators
+      // (" / " → "/"), so a tight section label ("Intro" / "Instru") eats a
+      // bigger character share than its pixel share and the box ends up
+      // starting to the RIGHT of the first chord — leaving the original first
+      // chord peeking out and shifting the whole replacement right. Measured
+      // on real sheets the overshoot is ~one chord slot, so pull the left
+      // edge back by `perChord`; cap the pull at half the section label so the
+      // keyword stays readable, and clamp to the word's own left edge.
+      const rawX0 = bbox.x0 + widthFull * (firstSpan.startIdx / totalLen);
+      const rawX1 = bbox.x0 + widthFull * (lastSpan.endIdx / totalLen);
+      const perChord = (rawX1 - rawX0) / Math.max(1, validSnaps.length);
+      const pullLeft = Math.min(perChord, (rawX0 - bbox.x0) * 0.5);
       const seqBbox = {
-        x0: bbox.x0 + widthFull * (firstSpan.startIdx / totalLen),
+        x0: Math.max(bbox.x0, rawX0 - pullLeft),
         y0: bbox.y0,
-        x1: bbox.x0 + widthFull * (lastSpan.endIdx / totalLen),
+        x1: rawX1,
         y1: bbox.y1,
       };
       const entries: SequenceEntry[] = validSnaps.map((chord, k) => {
@@ -409,18 +437,51 @@ function isSectionChordRow(line: TesseractLine): boolean {
   return slashCount >= 3;
 }
 
+// Fraction of a line's character ink that belongs to snappable chord
+// symbols. A chord row (verse/chorus chord line, with or without a section
+// keyword) is almost entirely chords, so this lands near 1.0; a lyric line —
+// even one hiding a coincidental chord shape such as the standalone "Eb" in
+// "Tune down ½ tone to Eb" — stays low because the chord chars are a tiny
+// slice of the token's length. This is what lets us relax the confidence
+// floor on chord rows without re-admitting lyric / tuning-hint false
+// positives.
+function chordCharCoverage(line: TesseractLine): number {
+  let covered = 0;
+  let total = 0;
+  for (const w of line.words ?? []) {
+    const raw = (w.text ?? "").trim();
+    if (!raw) continue;
+    const normalized = normalizeRaw(raw);
+    if (!normalized) continue;
+    total += normalized.length;
+    for (const span of findChordSpans(normalized)) {
+      if (snapChord(span.text)) covered += span.endIdx - span.startIdx;
+    }
+  }
+  return total > 0 ? covered / total : 0;
+}
+
+// Threshold separating chord rows (~1.0) from lyric / tuning lines (≤~0.2 in
+// practice) for the coverage gate above.
+const CHORD_ROW_COVERAGE_MIN = 0.5;
+
 function extractChordsFromLine(
   line: TesseractLine,
   bboxScale: number,
 ): ChordToken[] {
-  // Per-line classification has been removed for body rows — the vocabulary
-  // snapper is strict enough on its own (length ≤ 2 demands exact match,
-  // length 3+ caps edit distance) that it rejects lyric noise without
-  // needing a second per-line gate. We keep ONE special case: section
-  // header chord rows ("Intro / Bm / G / A / …") get a relaxed confidence
-  // floor because Tesseract scores their isolated chord glyphs much lower
-  // than body chord rows. See [isSectionChordRow] for the detection.
-  const minConfidence = isSectionChordRow(line) ? 0 : MIN_CONFIDENCE_OVERALL;
+  // Relax the confidence floor to 0 on rows that are clearly chords. Two
+  // signatures qualify: a section-header chord row ("Intro / Bm / G / A / …",
+  // see [isSectionChordRow]) OR any row whose ink is mostly snappable chord
+  // symbols ([chordCharCoverage]). Tesseract scores short, lyric-less chord
+  // rows — the chorus chord lines especially — at ~0 confidence, so a flat
+  // floor of 25 silently dropped whole rows of real chords. The vocab snapper
+  // (exact match ≤ 2 chars, tight edit distance for 3+) plus the coverage
+  // gate keep lyric and tuning-hint tokens out. Non-chord rows keep the
+  // normal floor so a stray high-confidence noise token can't slip through.
+  const isChordRow =
+    isSectionChordRow(line) ||
+    chordCharCoverage(line) >= CHORD_ROW_COVERAGE_MIN;
+  const minConfidence = isChordRow ? 0 : MIN_CONFIDENCE_OVERALL;
   const out: ChordToken[] = [];
   for (const word of line.words ?? []) {
     const raw = (word.text ?? "").trim();

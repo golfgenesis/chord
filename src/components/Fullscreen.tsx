@@ -8,7 +8,10 @@ import {
   notifyCacheChanged,
 } from "../lib/offlineDownload";
 import { loadLocal, saveLocal } from "../lib/persist";
+import { useWakeLock } from "../hooks/useWakeLock";
 import { ChordOverlay } from "./ChordOverlay";
+import { NextSongDrawer } from "./NextSongDrawer";
+import type { Song } from "../types";
 import { runChordOCR, type OCRResult } from "../lib/chordOCR";
 import { detectKey, type KeyEstimate } from "../lib/keyDetect";
 import { preferFlatsForKey, relativeMajorTonic } from "../lib/musicTheory";
@@ -39,9 +42,20 @@ function saveTransposeMap(map: TransposeMap) {
 // a developer/diagnostic flag, not a per-song preference.
 const OCR_DEBUG_KEY = "ocr-debug";
 
+// Opt-in "read mode": swaps the fit-whole-sheet layout (object-contain) for a
+// fit-width, vertically-scrollable one, and auto-scrolls. The mode persists
+// globally (a viewing preference, like invert).
+const SCROLL_MODE_KEY = "scroll-mode";
+// Auto-scroll pacing: glide from top to bottom over this many seconds, so the
+// speed adapts to each sheet's height (a taller sheet scrolls proportionally
+// faster to finish in the same time). Tuned to a typical song's length — there's
+// no manual speed control, it just runs.
+const SCROLL_DURATION_SEC = 180;
+
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
   const close = useApp((s) => s.close);
+  const open = useApp((s) => s.open);
   const invertImages = useApp((s) => s.invertImages);
   const toggleInvertImages = useApp((s) => s.toggleInvertImages);
   // Track which song id has finished loading. `loaded` is derived, so it
@@ -69,6 +83,37 @@ export function Fullscreen() {
   // so ChordOverlay re-renders when the element mounts — refs don't trigger
   // re-renders on assignment. handleImgRef below keeps both in sync.
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+
+  // --- Auto-scroll ("read mode") ------------------------------------------
+  // scrollMode swaps the fit-whole-sheet layout for a fit-width, scrollable
+  // one and, while on, a rAF loop glides scrollTop from top to bottom over
+  // SCROLL_DURATION_SEC. It runs on its own — no play/pause button, not tied to
+  // anything else. Hand-scrolling never stops it: any touch/wheel just pushes
+  // `resumeAt` a beat into the future so the loop follows the finger, then the
+  // glide picks back up from wherever the user left it.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollMode, setScrollMode] = useState<boolean>(() =>
+    loadLocal<boolean>(SCROLL_MODE_KEY, false),
+  );
+  const resumeAtRef = useRef(0);
+
+  // --- "Next song" queue --------------------------------------------------
+  // A drawer (swipe in from the right edge) to browse the catalogue and queue
+  // the next song without leaving fullscreen. Picking sets `nextSong`; the
+  // chip advances to it on tap via the store's open() (which switches the
+  // viewer AND broadcasts to the room, so the whole band follows). Deliberately
+  // NOT tied to auto-scroll — advancing is always an explicit tap.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [nextSong, setNextSong] = useState<Song | null>(null);
+  // Edge-swipe tracking for opening the drawer (start near the right edge,
+  // then drag left).
+  const edgeSwipeRef = useRef<{ x: number; y: number; edge: boolean } | null>(null);
+
+  const goToNext = useCallback(() => {
+    if (!nextSong) return;
+    open(nextSong);
+    setNextSong(null);
+  }, [nextSong, open]);
 
   // OCR state for the song currently being viewed. Derived: a stored
   // ocrState with a non-matching songId behaves as "not run yet". Switching
@@ -138,33 +183,24 @@ export function Fullscreen() {
     (k: number) => updateTranspose({ from: fromKey, to: k }),
     [fromKey, updateTranspose],
   );
-  // "Cancel transpose" — snap BOTH from and to back to the auto-detected
-  // source key (so the chip keeps showing the same key the user trusted
-  // for the detection) with delta = 0. Falling back to a hard delete
-  // would reset the chip to C, which feels broken when the page clearly
-  // shows the song is in a different key.
+  // "Reset to original key" — snap the TARGET back to the current source
+  // key so the rendered chords return to exactly what's printed (delta = 0,
+  // i.e. the state before the user touched anything). We keep `from` as-is
+  // rather than re-snapping it to the auto-detection: if the user manually
+  // corrected the source (because detection was off — common on songs with
+  // borrowed chords), resetting must NOT silently throw that correction
+  // away. The button only shows while a transpose is active, so an entry
+  // always exists here; the `?? 0` is just a defensive fallback.
   const resetTranspose = useCallback(() => {
     if (!song) return;
     const id = String(song.id);
-    const detected = currentOcr?.detectedKey;
     setTransposeMap((prev) => {
-      let next: TransposeMap;
-      if (detected && detected.confidence >= AUTO_DETECT_CONFIDENCE_MIN) {
-        const defaultTonic = relativeMajorTonic(detected.tonic, detected.mode);
-        next = {
-          ...prev,
-          [id]: { from: defaultTonic, to: defaultTonic },
-        };
-      } else if (id in prev) {
-        next = { ...prev };
-        delete next[id];
-      } else {
-        return prev;
-      }
+      const from = prev[id]?.from ?? 0;
+      const next: TransposeMap = { ...prev, [id]: { from, to: from } };
       saveTransposeMap(next);
       return next;
     });
-  }, [song, currentOcr]);
+  }, [song]);
 
   // Kick off OCR lazily when the panel is open and we have a loaded image.
   // The result is cached in IndexedDB by chordOCR.ts, so subsequent visits
@@ -370,11 +406,85 @@ export function Fullscreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [song, close]);
 
+  const toggleScrollMode = useCallback(() => {
+    setScrollMode((v) => {
+      const next = !v;
+      saveLocal(SCROLL_MODE_KEY, next);
+      return next;
+    });
+  }, []);
+
+  // New song → jump back to the top so the glide starts from the beginning.
+  // DOM-only (no setState) so it stays out of the set-state-in-effect rule.
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [song?.id]);
+
+  // The auto-scroll engine. Runs continuously whenever read mode is on and the
+  // sheet has painted — no button gates it. Each frame: if the user touched or
+  // wheeled within the last beat (`resumeAt`), follow their position; otherwise
+  // glide downward, pacing the full distance over SCROLL_DURATION_SEC. The
+  // float accumulator is essential — `scrollTop` rounds to an integer on most
+  // browsers, so a slow glide (< 1px/frame) would never advance via `+=`. At
+  // the bottom it simply idles (clamped); scroll back up and it resumes.
+  useEffect(() => {
+    if (!scrollMode || !loaded) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    let last = performance.now();
+    let acc = el.scrollTop;
+    const step = (now: number) => {
+      const dt = now - last;
+      last = now;
+      const distance = el.scrollHeight - el.clientHeight;
+      if (now < resumeAtRef.current) {
+        // User is driving (or just let go) — follow them, don't fight.
+        acc = el.scrollTop;
+      } else if (distance > 1) {
+        acc = Math.min(acc + (distance / SCROLL_DURATION_SEC) * (dt / 1000), distance);
+        el.scrollTop = acc;
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [scrollMode, loaded, song?.id]);
+
+  // Hold a screen wake lock while a chord sheet is open so the phone doesn't
+  // sleep mid-song. No-op where unsupported; auto-releases when the sheet closes.
+  useWakeLock(song != null);
 
   if (!song) return null;
 
+  const hasNext = nextSong != null && nextSong.id !== song.id;
+
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-bg bg-page-grad">
+    <div
+      className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-bg bg-page-grad"
+      // Edge-swipe to open the "next song" drawer: a touch that starts near
+      // the right edge and drags left. Tracked here on the wrapper so it works
+      // over the header and the (vertically-scrolling) sheet alike.
+      onTouchStart={(e) => {
+        const t = e.touches[0];
+        edgeSwipeRef.current = {
+          x: t.clientX,
+          y: t.clientY,
+          edge: t.clientX > window.innerWidth - 30,
+        };
+      }}
+      onTouchMove={(e) => {
+        const s = edgeSwipeRef.current;
+        if (!s || !s.edge) return;
+        const t = e.touches[0];
+        const dx = t.clientX - s.x;
+        const dy = t.clientY - s.y;
+        if (dx < -50 && Math.abs(dx) > Math.abs(dy)) {
+          setDrawerOpen(true);
+          edgeSwipeRef.current = null;
+        }
+      }}
+    >
       <header
         className="relative z-10 flex shrink-0 items-center gap-2 border-b border-white/[0.08] glass-strong px-3.5 py-2.5 text-white sm:gap-3 sm:px-5 sm:py-3"
         style={{ paddingTop: "calc(0.625rem + var(--safe-top))" }}
@@ -427,6 +537,23 @@ export function Fullscreen() {
             onToggleOcrDebug={toggleOcrDebug}
           />
           <button
+            onClick={toggleScrollMode}
+            className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
+              scrollMode
+                ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
+                : "border-white/[0.12] bg-white/[0.06] text-white/80 hover:border-white/20 hover:bg-white/[0.12]"
+            }`}
+            aria-label={scrollMode ? "ปิดโหมดเลื่อน" : "เปิดโหมดเลื่อน (เลื่อนอัตโนมัติได้)"}
+            aria-pressed={scrollMode}
+            title={
+              scrollMode
+                ? "โหมดเลื่อน: คอร์ดเต็มความกว้าง เลื่อนอ่านได้ — แตะเพื่อกลับไปย่อทั้งแผ่น"
+                : "โหมดเลื่อน: ขยายคอร์ดเต็มความกว้าง + เลื่อนอัตโนมัติ"
+            }
+          >
+            <ScrollModeIcon />
+          </button>
+          <button
             onClick={toggleInvertImages}
             className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
               invertImages
@@ -468,15 +595,42 @@ export function Fullscreen() {
           paint, so users see the image first and the gutter fades in
           afterwards. Flipping together is what reads as "just appeared". */}
       <div
-        className={`relative min-h-0 flex-1 overflow-hidden ${
+        ref={scrollRef}
+        className={`relative min-h-0 flex-1 ${
+          scrollMode ? "overflow-y-auto overflow-x-hidden" : "overflow-hidden"
+        } ${
           loaded
             ? invertImages
               ? "bg-black"
               : "bg-white"
             : "bg-transparent"
         }`}
-        style={{ paddingBottom: "var(--safe-bottom)" }}
-        onClick={close}
+        style={{
+          // Extra bottom room in read mode so the last lines clear the
+          // floating auto-scroll controls.
+          paddingBottom: scrollMode
+            ? "calc(var(--safe-bottom) + 4.5rem)"
+            : "var(--safe-bottom)",
+        }}
+        // Tapping the backdrop closes only in fit mode. In read mode exiting is
+        // via the header X, so a stray tap while reading never kicks you out.
+        onClick={() => {
+          if (!scrollMode) close();
+        }}
+        // Hand-scrolling coexists with the glide: any touch/move/wheel pushes
+        // `resumeAt` ~0.6s ahead, so the loop follows the user while they're
+        // active and the glide resumes on its own shortly after they stop —
+        // it never gets permanently parked. (No touchend needed: the absence
+        // of further touchmove lets the window lapse and the glide pick up.)
+        onTouchStart={() => {
+          resumeAtRef.current = performance.now() + 600;
+        }}
+        onTouchMove={() => {
+          resumeAtRef.current = performance.now() + 600;
+        }}
+        onWheel={() => {
+          resumeAtRef.current = performance.now() + 600;
+        }}
       >
         {!loaded && !errored && (
           // Delayed via CSS animation rather than a setTimeout-driven state
@@ -531,8 +685,10 @@ export function Fullscreen() {
         {/* Plain positioning container for the <img> + chord-text overlay.
             ChordOverlay computes its own absolute layout off the img's
             clientWidth/Height, but needs to live in the same parent so its
-            overlay coordinates resolve against the same box. */}
-        <div className="relative h-full w-full">
+            overlay coordinates resolve against the same box. In read mode the
+            wrapper is height-auto (= image height) so the container can scroll
+            the full sheet; otherwise it's h-full for object-contain centering. */}
+        <div className={`relative w-full ${scrollMode ? "" : "h-full"}`}>
           <img
             // Bump the key on retry to force React to remount — same src
             // would otherwise re-serve the failed entry from the in-memory
@@ -575,7 +731,9 @@ export function Fullscreen() {
             // and doesn't introduce any "half-decoded image" flicker for
             // network loads (WebP at our quality is decoded all-at-once,
             // not progressively).
-            className="block h-full w-full select-none object-contain"
+            className={`block w-full select-none ${
+              scrollMode ? "h-auto" : "h-full object-contain"
+            }`}
             style={{
               // Plain invert — flips white paper → black + black ink → white.
               // No contrast/hue-rotate/saturation tweaks; those over-processed
@@ -607,7 +765,75 @@ export function Fullscreen() {
         </div>
       </div>
 
+      {/* "Next song" chip — appears once one is queued. Tap to advance now
+          (open() switches the viewer and broadcasts to the room). Sits bottom-
+          center; pinned outside the scroll container. */}
+      {hasNext && (
+        <button
+          onClick={goToNext}
+          className="absolute left-1/2 z-20 flex max-w-[80%] -translate-x-1/2 items-center gap-2.5 rounded-full border border-white/10 bg-bg-soft/90 py-2 pl-4 pr-2 text-white shadow-2xl backdrop-blur-xl transition active:scale-95"
+          style={{ bottom: "calc(var(--safe-bottom) + 1rem)" }}
+          aria-label={`ไปเพลงถัดไป: ${nextSong!.name}`}
+        >
+          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-ink-mute">
+            ถัดไป
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+            {nextSong!.name}
+          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-grad shadow-glow-sm ring-1 ring-white/10">
+            <SkipNextIcon />
+          </span>
+        </button>
+      )}
+
+      {/* Discoverability handle for the edge-swipe drawer. */}
+      <button
+        onClick={() => setDrawerOpen(true)}
+        className="absolute right-0 top-1/2 z-20 grid h-16 w-6 -translate-y-1/2 place-items-center rounded-l-xl border-y border-l border-white/10 bg-bg-soft/70 text-white/70 backdrop-blur-xl transition hover:bg-bg-soft/90 hover:text-white active:scale-95"
+        aria-label="เลือกเพลงถัดไป"
+        title="เลือกเพลงถัดไป (ลากจากขอบขวา)"
+      >
+        <ChevronLeftIcon />
+      </button>
+
+      <NextSongDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        currentId={song.id}
+        nextId={nextSong?.id ?? null}
+        onPick={(s) => {
+          setNextSong(s);
+          setDrawerOpen(false);
+        }}
+      />
     </div>
+  );
+}
+
+function SkipNextIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[18px]" aria-hidden="true">
+      <path d="M6 5v14l9-7z" />
+      <rect x="16" y="5" width="2.5" height="14" rx="1" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-[18px]"
+      aria-hidden="true"
+    >
+      <path d="m15 6-6 6 6 6" />
+    </svg>
   );
 }
 
@@ -871,12 +1097,13 @@ function DetectionChip({
               </div>
 
               {transposeActive && (
-                <div className="-mb-0.5 flex justify-end border-t border-white/[0.06] pt-2.5">
+                <div className="-mb-0.5 border-t border-white/[0.06] pt-2.5">
                   <button
                     onClick={handleReset}
-                    className="text-[11px] font-medium text-ink-dim transition hover:text-danger"
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/[0.12] bg-white/[0.06] py-2 text-[12px] font-semibold text-white/85 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition hover:border-white/20 hover:bg-white/[0.12] hover:text-white active:scale-[0.98]"
                   >
-                    ยกเลิกการเปลี่ยนคีย์
+                    <RetryIcon />
+                    คืนคีย์เดิม ({keyDisplay(fromKey)})
                   </button>
                 </div>
               )}
@@ -1125,4 +1352,28 @@ function ContrastIcon() {
     </svg>
   );
 }
+
+// Lines of text + a downward arrow — "readable text view that scrolls".
+function ScrollModeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-[18px]"
+      aria-hidden="true"
+    >
+      <line x1="4" y1="6" x2="15" y2="6" />
+      <line x1="4" y1="12" x2="15" y2="12" />
+      <line x1="4" y1="18" x2="11" y2="18" />
+      <path d="M19 8v9" />
+      <path d="m16.5 14.5 2.5 2.5 2.5-2.5" />
+    </svg>
+  );
+}
+
+
 

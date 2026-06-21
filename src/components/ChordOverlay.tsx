@@ -206,16 +206,36 @@ export function ChordOverlay({
   const boxBg = invert ? "#000" : "#fff";
   const boxFg = invert ? "#fca5a5" : "#dc2626";
 
+  // Page-wide UNIFORM font size for single-chord replacements. Tesseract
+  // measures each glyph's bbox tightly, so the old per-chord sizing made
+  // identically-printed chords come out at visibly different sizes. Drive a
+  // single size off the MEDIAN detected glyph height so the overlay reads as
+  // uniform as the print. (Sequence rows keep their own fit-to-width sizing —
+  // one label spanning a whole section row genuinely needs to shrink.)
+  //
+  // 0.62 ≈ average monospace ch-width / em — used only by the sequence
+  // width-fit below.
+  const CHAR_W_RATIO = 0.62;
+  const dispHeights = result.chords
+    .map((c) => (c.bbox.y1 - c.bbox.y0) * layout.scale)
+    .filter((h) => h > 0)
+    .sort((a, b) => a - b);
+  const medianH = dispHeights.length
+    ? dispHeights[Math.floor(dispHeights.length / 2)]
+    : 16;
+  const uniformFont = Math.max(11, medianH * 1.05);
+  const uniformPadX = Math.max(2, Math.round(medianH * 0.06));
+  const uniformPadY = Math.max(3, Math.round(medianH * 0.22));
+  const uniformBoxH = medianH + uniformPadY * 2;
+
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0">
       {result.chords.map((chord, i) => {
-        // Sequence tokens (section header chord rows) carry an ordered
-        // array of {chord, pre} entries with the original separators
-        // preserved ("/" for measure boundaries, " " for adjacent
-        // chords sharing a measure). Transpose each chord, rejoin with
-        // the SAME separators, and render as ONE label sized to fit
-        // the source bbox width. The bbox is already sliced upstream
-        // to exclude any section label prefix so "Intro" stays visible.
+        // Sequence tokens (section header chord rows) carry an ordered array
+        // of {chord, pre} entries with the original separators preserved
+        // ("/" for measure boundaries, " " for adjacent chords sharing a
+        // measure). Transpose each, rejoin with the SAME separators, and
+        // render as ONE label. Single chords transpose directly.
         const isSequence = !!chord.sequence && chord.sequence.length >= 2;
         const newName = isSequence
           ? chord
@@ -230,61 +250,63 @@ export function ChordOverlay({
           : chord.text;
         if (newName === original) return null; // nothing to change
 
-        const left = layout.offsetX + chord.bbox.x0 * layout.scale;
-        const top = layout.offsetY + chord.bbox.y0 * layout.scale;
-        const width = (chord.bbox.x1 - chord.bbox.x0) * layout.scale;
-        const height = (chord.bbox.y1 - chord.bbox.y0) * layout.scale;
+        const glyphLeft = layout.offsetX + chord.bbox.x0 * layout.scale;
+        const glyphTop = layout.offsetY + chord.bbox.y0 * layout.scale;
+        const glyphW = (chord.bbox.x1 - chord.bbox.x0) * layout.scale;
+        const glyphH = (chord.bbox.y1 - chord.bbox.y0) * layout.scale;
 
-        // Pad the box generously around the OCR bbox — Tesseract's bboxes
-        // hug the glyph tightly (often dropping the ascender/descender), so
-        // the original chord text peeks out at the edges if we don't.
-        // Vertical pad is larger than horizontal because chord labels like
-        // "F#" / "Bm7" have descenders/ascenders that fall outside the
-        // measured bbox.
-        const padX = Math.max(2, Math.floor(height * 0));
-        const padY = Math.max(2, Math.floor(height * 0));
-        const pad = padX; // back-compat name used below for padding shorthand
+        // Resolve cover-box geometry + font size per kind. Tesseract's bboxes
+        // hug the glyph tightly and clip accidentals/ascenders, so a little
+        // padding keeps the original from peeking out around the replacement.
+        let padX: number;
+        let boxLeft: number;
+        let boxTop: number;
+        let boxMinW: number;
+        let boxH: number;
+        let fontSize: number;
+        if (isSequence) {
+          // Fit the whole "D / A / Bm / …" string inside the source bbox
+          // width — a wide section row legitimately needs to shrink.
+          padX = Math.max(2, Math.round(glyphH * 0.06));
+          const padY = Math.max(3, Math.round(glyphH * 0.22));
+          const widthBudget = (glyphW + padX * 2) * 1.2;
+          const widthCap =
+            widthBudget / Math.max(1, newName.length * CHAR_W_RATIO);
+          fontSize = Math.max(10, Math.min(glyphH * 1.2, widthCap));
+          boxLeft = glyphLeft - padX;
+          boxTop = glyphTop - padY;
+          boxMinW = glyphW + padX * 2;
+          boxH = glyphH + padY * 2;
+        } else {
+          // Single chord: uniform size + box, centred on the original glyph's
+          // vertical midline so differing bbox heights don't shift it. Width
+          // overflow is allowed (nowrap) so a longer name ("C" → "F#") stays
+          // readable; minWidth keeps the cover at least as wide as the glyph.
+          padX = uniformPadX;
+          fontSize = uniformFont;
+          boxH = uniformBoxH;
+          boxMinW = glyphW + uniformPadX * 2;
+          boxLeft = glyphLeft - uniformPadX;
+          boxTop = glyphTop + glyphH / 2 - uniformBoxH / 2;
+        }
 
-        // Font size is capped by both vertical fit (height × 1.2, matches
-        // the original printed glyph size) AND horizontal fit (slice width
-        // ÷ new chord-name length). The width cap prevents long
-        // transpositions ("C" → "F#m") and tight section-header chord
-        // rows (where Tesseract glues "IntroC#/F#mE/DE/..." into one
-        // token and each chord's bbox is sliced to a sliver — char-
-        // proportional slicing) from overflowing and stacking labels on
-        // top of each other. Allow the label to extend up to ~1.2× the
-        // bbox width so a single-char "C" → "F#m" still grows a little,
-        // but can't drift across an adjacent chord on dense rows.
-        //
-        // 0.62 ≈ average monospace ch-width / em — tighter than
-        // proportional fonts but loose enough that bolds still fit.
-        const CHAR_W_RATIO = 0.62;
-        const heightCap = height * 1.2;
-        const widthBudget = (width + padX * 2) * 1.2;
-        const widthCap =
-          widthBudget / Math.max(1, newName.length * CHAR_W_RATIO);
-        const fontSize = Math.max(10, Math.min(heightCap, widthCap));
-
-        // Allow horizontal overflow so longer chord names ("C" → "F#") stay
-        // readable. minWidth keeps the cover-up rectangle at least as wide
-        // as the original glyph.
         return (
           <div
             key={i}
             style={{
               position: "absolute",
-              left: left - padX,
-              top: top - padY,
-              minWidth: width + padX * 2,
-              height: height + padY * 2,
-              padding: `0 ${pad}px`,
+              left: boxLeft,
+              top: boxTop,
+              minWidth: boxMinW,
+              height: boxH,
+              padding: `0 ${padX}px`,
               background: boxBg,
               color: boxFg,
               fontFamily:
                 "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
               fontWeight: 700,
               fontSize,
-              lineHeight: `${height + padY * 2}px`,
+              lineHeight: `${boxH}px`,
               whiteSpace: "nowrap",
               boxSizing: "border-box",
               display: "inline-block",
