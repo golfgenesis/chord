@@ -45,20 +45,11 @@ function saveTransposeMap(map: TransposeMap) {
 // a developer/diagnostic flag, not a per-song preference.
 const OCR_DEBUG_KEY = "ocr-debug";
 
-// Opt-in "read mode": swaps the fit-whole-sheet layout (object-contain) for a
-// fit-width, vertically-scrollable one, and auto-scrolls. The mode persists
-// globally (a viewing preference, like invert).
-const SCROLL_MODE_KEY = "scroll-mode";
 // Only an owner (signed in with one of these emails) may flip a text-mode song BACK to
 // the original image. Everyone else always gets the OCR'd text version when one exists.
 // Soft UX gate, not security — the chord data isn't secret.
 const OWNER_EMAILS = ["blackpearl_golf@hotmail.com", "blackpearlgolf@gmail.com"];
 const OWNER_IMAGE_KEY = "owner-image-mode";
-// Auto-scroll pacing: glide from top to bottom over this many seconds, so the
-// speed adapts to each sheet's height (a taller sheet scrolls proportionally
-// faster to finish in the same time). Tuned to a typical song's length — there's
-// no manual speed control, it just runs.
-const SCROLL_DURATION_SEC = 180;
 
 export function Fullscreen() {
   const song = useApp((s) => s.viewing);
@@ -147,25 +138,16 @@ export function Fullscreen() {
   // re-renders on assignment. handleImgRef below keeps both in sync.
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
 
-  // --- Auto-scroll ("read mode") ------------------------------------------
-  // scrollMode swaps the fit-whole-sheet layout for a fit-width, scrollable
-  // one and, while on, a rAF loop glides scrollTop from top to bottom over
-  // SCROLL_DURATION_SEC. It runs on its own — no play/pause button, not tied to
-  // anything else. Hand-scrolling never stops it: any touch/wheel just pushes
-  // `resumeAt` a beat into the future so the loop follows the finger, then the
-  // glide picks back up from wherever the user left it.
+  // Ref to the scrollable sheet container — used to jump back to the top when
+  // the song changes.
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [scrollMode, setScrollMode] = useState<boolean>(() =>
-    loadLocal<boolean>(SCROLL_MODE_KEY, false),
-  );
-  const resumeAtRef = useRef(0);
 
   // --- "Next song" queue --------------------------------------------------
   // A drawer (swipe in from the right edge) to browse the catalogue and queue
   // the next song without leaving fullscreen. Picking sets `nextSong`; the
   // chip advances to it on tap via the store's open() (which switches the
-  // viewer AND broadcasts to the room, so the whole band follows). Deliberately
-  // NOT tied to auto-scroll — advancing is always an explicit tap.
+  // viewer AND broadcasts to the room, so the whole band follows). Advancing is
+  // always an explicit tap.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [nextSong, setNextSong] = useState<Song | null>(null);
   // Edge-swipe tracking for opening the drawer (start near the right edge,
@@ -474,50 +456,11 @@ export function Fullscreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [song, close]);
 
-  const toggleScrollMode = useCallback(() => {
-    setScrollMode((v) => {
-      const next = !v;
-      saveLocal(SCROLL_MODE_KEY, next);
-      return next;
-    });
-  }, []);
-
-  // New song → jump back to the top so the glide starts from the beginning.
-  // DOM-only (no setState) so it stays out of the set-state-in-effect rule.
+  // New song → jump back to the top. DOM-only (no setState) so it stays out of
+  // the set-state-in-effect rule.
   useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [song?.id]);
-
-  // The auto-scroll engine. Runs continuously whenever read mode is on and the
-  // sheet has painted — no button gates it. Each frame: if the user touched or
-  // wheeled within the last beat (`resumeAt`), follow their position; otherwise
-  // glide downward, pacing the full distance over SCROLL_DURATION_SEC. The
-  // float accumulator is essential — `scrollTop` rounds to an integer on most
-  // browsers, so a slow glide (< 1px/frame) would never advance via `+=`. At
-  // the bottom it simply idles (clamped); scroll back up and it resumes.
-  useEffect(() => {
-    if (!scrollMode || !loaded) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    let raf = 0;
-    let last = performance.now();
-    let acc = el.scrollTop;
-    const step = (now: number) => {
-      const dt = now - last;
-      last = now;
-      const distance = el.scrollHeight - el.clientHeight;
-      if (now < resumeAtRef.current) {
-        // User is driving (or just let go) — follow them, don't fight.
-        acc = el.scrollTop;
-      } else if (distance > 1) {
-        acc = Math.min(acc + (distance / SCROLL_DURATION_SEC) * (dt / 1000), distance);
-        el.scrollTop = acc;
-      }
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [scrollMode, loaded, song?.id]);
 
   // Hold a screen wake lock while a chord sheet is open so the phone doesn't
   // sleep mid-song. No-op where unsupported; auto-releases when the sheet closes.
@@ -635,23 +578,6 @@ export function Fullscreen() {
             </button>
           )}
           <button
-            onClick={toggleScrollMode}
-            className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
-              scrollMode
-                ? "border-brand/40 bg-brand-soft text-brand hover:bg-brand/20"
-                : "border-white/[0.12] bg-white/[0.06] text-white/80 hover:border-white/20 hover:bg-white/[0.12]"
-            }`}
-            aria-label={scrollMode ? "ปิดโหมดเลื่อน" : "เปิดโหมดเลื่อน (เลื่อนอัตโนมัติได้)"}
-            aria-pressed={scrollMode}
-            title={
-              scrollMode
-                ? "โหมดเลื่อน: คอร์ดเต็มความกว้าง เลื่อนอ่านได้ — แตะเพื่อกลับไปย่อทั้งแผ่น"
-                : "โหมดเลื่อน: ขยายคอร์ดเต็มความกว้าง + เลื่อนอัตโนมัติ"
-            }
-          >
-            <ScrollModeIcon />
-          </button>
-          <button
             onClick={toggleInvertImages}
             className={`grid size-9 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] transition active:scale-95 ${
               invertImages
@@ -695,7 +621,7 @@ export function Fullscreen() {
       <div
         ref={scrollRef}
         className={`relative min-h-0 flex-1 ${
-          scrollMode || textMode
+          textMode
             ? "overflow-y-auto overflow-x-hidden"
             : "overflow-hidden"
         } ${
@@ -705,31 +631,11 @@ export function Fullscreen() {
               : "bg-white"
             : "bg-transparent"
         }`}
-        style={{
-          // Extra bottom room in read mode so the last lines clear the
-          // floating auto-scroll controls.
-          paddingBottom: scrollMode
-            ? "calc(var(--safe-bottom) + 4.5rem)"
-            : "var(--safe-bottom)",
-        }}
-        // Tapping the backdrop closes only in fit mode. In read mode exiting is
-        // via the header X, so a stray tap while reading never kicks you out.
+        style={{ paddingBottom: "var(--safe-bottom)" }}
+        // Tapping the backdrop closes in image mode. In text mode exiting is via
+        // the header X, so a stray tap while reading never kicks you out.
         onClick={() => {
-          if (!scrollMode && !textMode) close();
-        }}
-        // Hand-scrolling coexists with the glide: any touch/move/wheel pushes
-        // `resumeAt` ~0.6s ahead, so the loop follows the user while they're
-        // active and the glide resumes on its own shortly after they stop —
-        // it never gets permanently parked. (No touchend needed: the absence
-        // of further touchmove lets the window lapse and the glide pick up.)
-        onTouchStart={() => {
-          resumeAtRef.current = performance.now() + 600;
-        }}
-        onTouchMove={() => {
-          resumeAtRef.current = performance.now() + 600;
-        }}
-        onWheel={() => {
-          resumeAtRef.current = performance.now() + 600;
+          if (!textMode) close();
         }}
       >
         {!loaded && !errored && (
@@ -785,21 +691,16 @@ export function Fullscreen() {
         {/* Plain positioning container for the <img> + chord-text overlay.
             ChordOverlay computes its own absolute layout off the img's
             clientWidth/Height, but needs to live in the same parent so its
-            overlay coordinates resolve against the same box. In read mode the
-            wrapper is height-auto (= image height) so the container can scroll
-            the full sheet; otherwise it's h-full for object-contain centering. */}
-        <div
-          className={`relative w-full ${
-            scrollMode || textMode ? "" : "h-full"
-          }`}
-        >
+            overlay coordinates resolve against the same box. In text mode the
+            wrapper is height-auto so the container can scroll the full sheet;
+            in image mode it's h-full for object-contain centering. */}
+        <div className={`relative w-full ${textMode ? "" : "h-full"}`}>
           {textMode ? (
             <ChordSheet
               sheet={parsedSheet!}
               fromKey={fromKey}
               toKey={toKey}
               invert={invertImages}
-              fit={!scrollMode}
             />
           ) : (
             <>
@@ -845,9 +746,7 @@ export function Fullscreen() {
             // and doesn't introduce any "half-decoded image" flicker for
             // network loads (WebP at our quality is decoded all-at-once,
             // not progressively).
-            className={`block w-full select-none ${
-              scrollMode ? "h-auto" : "h-full object-contain"
-            }`}
+            className="block h-full w-full select-none object-contain"
             style={{
               // Plain invert — flips white paper → black + black ink → white.
               // No contrast/hue-rotate/saturation tweaks; those over-processed
@@ -1498,27 +1397,6 @@ function ContrastIcon() {
   );
 }
 
-// Lines of text + a downward arrow — "readable text view that scrolls".
-function ScrollModeIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="size-[18px]"
-      aria-hidden="true"
-    >
-      <line x1="4" y1="6" x2="15" y2="6" />
-      <line x1="4" y1="12" x2="15" y2="12" />
-      <line x1="4" y1="18" x2="11" y2="18" />
-      <path d="M19 8v9" />
-      <path d="m16.5 14.5 2.5 2.5 2.5-2.5" />
-    </svg>
-  );
-}
 
 
 

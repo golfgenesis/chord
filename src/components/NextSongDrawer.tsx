@@ -9,8 +9,8 @@ import { CheckIcon, XIcon } from "./icons";
 /**
  * Right-side drawer for queuing the *next* song without leaving fullscreen.
  * Opened by an edge-swipe (or the handle) on the Fullscreen viewer. Tapping a
- * song sets it as the queue target; the viewer advances to it when the current
- * sheet's auto-scroll finishes, or when the user hits the next button.
+ * song sets it as the queue target; the viewer advances to it when the user
+ * taps the "next" chip.
  *
  * The catalogue is ~70k rows so the list is virtualized. With no search query
  * it surfaces the "likely next" songs (favorites + recent + playlist members)
