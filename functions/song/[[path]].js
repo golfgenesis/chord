@@ -63,6 +63,54 @@ export function slugify(name) {
   );
 }
 
+// Sorted [{id,name}] of indexable (cp) songs, cached per isolate. Drives the
+// internal "related songs" links: the sitemap gives Google DISCOVERY, these
+// links give CRAWL DEPTH + spread authority + add on-page content (less thin).
+// The neighbour-wrap fill guarantees every page is reachable from every other.
+let CP_LIST = null;
+function cpList(songs) {
+  if (CP_LIST) return CP_LIST;
+  CP_LIST = [...songs.values()]
+    .filter((s) => s.cp)
+    .map((s) => ({ id: s.id, name: s.name }))
+    .sort((a, b) => a.id - b.id);
+  return CP_LIST;
+}
+function tokenize(name) {
+  return String(name)
+    .toLowerCase()
+    .split(/[\s_\-]+/)
+    .filter((t) => t.length >= 2);
+}
+export function relatedSongs(songs, current, n = 12) {
+  const list = cpList(songs);
+  if (list.length <= 1) return [];
+  const out = [];
+  const seen = new Set([current.id]);
+  // 1) songs sharing a word in the name (light relevance).
+  const tokens = new Set(tokenize(current.name));
+  if (tokens.size) {
+    for (const s of list) {
+      if (seen.has(s.id)) continue;
+      if (tokenize(s.name).some((t) => tokens.has(t))) {
+        out.push(s);
+        seen.add(s.id);
+        if (out.length >= n) return out;
+      }
+    }
+  }
+  // 2) fill with sorted neighbours (wrapping) for full crawl connectivity.
+  const idx = list.findIndex((s) => s.id === current.id);
+  for (let step = 1; step < list.length && out.length < n; step++) {
+    const s = list[(idx + step) % list.length];
+    if (!seen.has(s.id)) {
+      out.push(s);
+      seen.add(s.id);
+    }
+  }
+  return out;
+}
+
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -204,7 +252,7 @@ export function buildHead(song, canonicalUrl, sheet, indexable) {
 }
 
 /** Build the crawlable <article> injected into the #root <!-- ssr --> marker. */
-export function buildArticle(song, sheet, indexable) {
+export function buildArticle(song, sheet, indexable, related = []) {
   const name = song.name;
   const metaBits = [];
   if (sheet.meta.key) metaBits.push(`คีย์ ${esc(sheet.meta.key)}`);
@@ -213,6 +261,18 @@ export function buildArticle(song, sheet, indexable) {
   const body = indexable
     ? `<pre class="ssr-sheet">${esc(sheet.text)}</pre>`
     : `<p>เปิดแอปเพื่อดูคอร์ดเพลงนี้</p>`;
+  const relatedHtml = related.length
+    ? `<section style="margin-top:28px;border-top:1px solid #ffffff14;padding-top:16px">` +
+      `<h2 style="font-size:15px;font-weight:600;margin:0 0 10px;color:#e8e8ea">คอร์ดเพลงอื่น ๆ</h2>` +
+      `<ul style="list-style:none;padding:0;margin:0;display:grid;gap:8px">` +
+      related
+        .map(
+          (r) =>
+            `<li><a href="/song/${r.id}/${encodeURIComponent(slugify(r.name))}" style="color:#a78bfa;text-decoration:none;font-size:14px">คอร์ดเพลง ${esc(r.name)}</a></li>`,
+        )
+        .join("") +
+      `</ul></section>`
+    : "";
   // Inline styles so it reads fine before the app's CSS loads, and stays out of
   // the app's way (React replaces #root on mount). aria-hidden NOT set — this is
   // the real content for crawlers.
@@ -224,6 +284,7 @@ export function buildArticle(song, sheet, indexable) {
     note +
     `<div style="font-size:14px;color:#b8b8bd;margin:8px 0 16px">เนื้อร้องพร้อมคอร์ดกีตาร์/อูคูเลเล่ เปลี่ยนคีย์ได้ในแอป เล่นพร้อมวงแบบเรียลไทม์</div>` +
     body +
+    relatedHtml +
     `</article>`
   );
 }
@@ -285,9 +346,10 @@ export async function onRequest(context) {
   const sheet = song.cp ? renderSheet(song.cp) : { text: "", meta: {}, chords: [] };
   const canonicalUrl = `https://chord.golfchairat.com/song/${id}/${encodeURIComponent(slug)}`;
 
+  const related = indexable ? relatedSongs(songs, song) : [];
   let html = await (await env.ASSETS.fetch(new Request(`${origin}/index.html`))).text();
   const head = buildHead(song, canonicalUrl, sheet, indexable);
-  const article = buildArticle(song, sheet, indexable);
+  const article = buildArticle(song, sheet, indexable, related);
   // Function replacers so `$` in lyrics/chords isn't treated as a backreference.
   html = html.replace(/<!-- seo:start[\s\S]*?<!-- seo:end -->/, () => head);
   html = html.replace("<!-- ssr -->", () => article);

@@ -7,7 +7,7 @@
 
 import { precacheAndRoute, createHandlerBoundToURL, cleanupOutdatedCaches } from "workbox-precaching";
 import { registerRoute, NavigationRoute } from "workbox-routing";
-import { CacheFirst, StaleWhileRevalidate } from "workbox-strategies";
+import { CacheFirst } from "workbox-strategies";
 import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
 
@@ -26,7 +26,15 @@ self.__WB_DISABLE_DEV_LOGS = true;
 
 self.skipWaiting();
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      // songs.bin moved from a runtime stale-while-revalidate route to the
+      // precache — delete the legacy "chord-songs" cache so an old payload
+      // can't linger and reclaim its ~1.4 MB. No-op if it never existed.
+      await caches.delete("chord-songs").catch(() => {});
+      await self.clients.claim();
+    })(),
+  );
 });
 
 // 1) Precache build assets (JS, CSS, HTML, SVG, fonts) ------------------------
@@ -36,14 +44,12 @@ cleanupOutdatedCaches();
 // 2) SPA navigation fallback to index.html ------------------------------------
 registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html")));
 
-// 3) songs.bin (obfuscated payload) — stale-while-revalidate -----------------
-registerRoute(
-  ({ url }) => url.pathname === "/songs.bin",
-  new StaleWhileRevalidate({
-    cacheName: "chord-songs",
-    plugins: [new CacheableResponsePlugin({ statuses: [0, 200] })],
-  }),
-);
+// 3) songs.bin (obfuscated payload) — PRECACHED, not a runtime route ---------
+// It's matched by precacheAndRoute above (included via the `bin` glob in
+// vite.config.ts). Being revisioned by content hash, a songs.bin change bumps
+// sw.js, so the main.tsx update poll + controllerchange reload deliver the new
+// data to every client. The old stale-while-revalidate route is gone — it
+// served the previous payload for one extra load after each deploy.
 
 // 4) Images — cache-first from R2 (or same-origin proxy in prod) -------------
 const IMAGE_BASE = import.meta.env.VITE_IMAGE_BASE as string | undefined;

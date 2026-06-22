@@ -199,7 +199,12 @@ export default defineConfig({
         ],
       },
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,woff2}"],
+        // `bin` is included so public/songs.bin is PRECACHED (revisioned by content
+        // hash) rather than served by a runtime route. A songs.bin-only deploy then
+        // changes its revision → changes sw.js → the update poll in main.tsx detects
+        // the new SW and auto-reloads, so the data update reaches everyone (≈60 s or
+        // on tab-refocus) instead of lagging one load behind stale-while-revalidate.
+        globPatterns: ["**/*.{js,css,html,svg,woff2,bin}"],
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
       },
       // Without this the service worker only runs after `vite build`,

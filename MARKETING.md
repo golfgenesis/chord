@@ -69,7 +69,9 @@ deploy → `npm run seo:indexnow` (or ping only the new song URLs).
       + `WebSite`+`Organization` JSON-LD (with `SearchAction`) in [index.html](index.html);
       `referrer` → `strict-origin-when-cross-origin` (analytics/affiliate attribution).
 - [x] **robots.txt** allows all + points to the sitemap.
-- [x] **Edge SSR** per-song pages — [functions/song/[[path]].js](functions/song/%5B%5Bpath%5D%5D.js).
+- [x] **Edge SSR** per-song pages — [functions/song/[[path]].js](functions/song/%5B%5Bpath%5D%5D.js)
+      (+ internal "คอร์ดเพลงอื่น ๆ" links per page: shared-word relevance then neighbour-wrap fill, so
+      crawlers walk song→song and every indexable page is reachable — adds crawl depth + on-page content).
 - [x] **Sitemap** index + chunked song sitemaps — [scripts/build-sitemap.mjs](scripts/build-sitemap.mjs).
 - [x] **IndexNow** + **social-post** ops scripts (ported from tetono) +
       IndexNow key file `public/a3f8c1e94b7d2056e8f1a9c3d6b40572.txt`.
