@@ -62,6 +62,22 @@ if (fs.existsSync(CHORDPRO_DIR)) {
   }
 }
 
+// QA flags from `chordpro:check` → data/chordpro/_flagged.tsv (id \t english \t thai).
+// We ship the THAI reason as `flag` on the song so the owner sees, in-app, what the checker
+// suspects is wrong. It's rendered ONLY for OWNER_EMAILS (client-side gate) — a soft review
+// aid, consistent with the existing owner-only image toggle, not secret data.
+const FLAGGED_TSV = path.join(CHORDPRO_DIR, "_flagged.tsv");
+const flags = new Map();
+if (fs.existsSync(FLAGGED_TSV)) {
+  for (const line of fs.readFileSync(FLAGGED_TSV, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const cols = line.split("\t");
+    const id = Number(cols[0]);
+    const th = (cols[2] ?? cols[1] ?? "").trim(); // thai col, fall back to english
+    if (Number.isInteger(id) && th) flags.set(id, th);
+  }
+}
+
 // Case-insensitive collision detection (matches Windows + Python logic)
 const counts = new Map();
 for (const r of records) {
@@ -74,9 +90,15 @@ const slim = records.map((r) => {
   const dup = counts.get(base.toLowerCase()) > 1;
   const name = dup ? `${base}_${r.id}` : base;
   const cp = chordpro.get(r.id);
-  return cp ? { id: r.id, name, cp } : { id: r.id, name };
+  const flag = flags.get(r.id);
+  const rec = { id: r.id, name };
+  if (cp) rec.cp = cp;
+  if (flag) rec.flag = flag;
+  return rec;
 });
-console.log(`build-data: ${slim.length} songs, ${chordpro.size} with ChordPro text`);
+console.log(
+  `build-data: ${slim.length} songs, ${chordpro.size} with ChordPro text, ${flags.size} flagged`,
+);
 
 const json = Buffer.from(JSON.stringify(slim), "utf8");
 const gz = zlib.gzipSync(json, { level: 9 });

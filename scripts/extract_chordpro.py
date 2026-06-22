@@ -593,6 +593,32 @@ def assemble(raw, ov=None, warn=None):
     while final and final[-1] == '': final.pop()
     return apply_overrides('\n'.join(final), ov)
 
+def warn_th(w):
+    """Human-readable THAI phrasing of an English --check warning. Shipped per-song in
+    songs.bin (column 3 of _flagged.tsv) and shown in-app to the owner only, so the person
+    reviewing the catalogue sees *what* is wrong in their own language without reading the
+    code. Unknown shapes fall back to the raw English string."""
+    m = re.match(r"off-vocab chord '(.+)'$", w)
+    if m: return f"คอร์ด {m.group(1)} อาจอ่านผิด (ไม่อยู่ในชุดคอร์ดของเพลง)"
+    m = re.match(r"low-confidence (.+)$", w)
+    if m: return f"คอร์ด {m.group(1)} ความมั่นใจต่ำ อาจอ่านผิด"
+    if w == 'lyric rows but ZERO chords': return "มีเนื้อเพลงแต่อ่านคอร์ดไม่ได้เลย"
+    m = re.match(r"(\d+) HTML line\(s\) not drawn in image$", w)
+    if m: return f"เนื้อเพลง {m.group(1)} บรรทัดไม่ปรากฏในรูป (อาจเป็นท่อนซ้ำ หรือคอร์ดวางไม่ครบ)"
+    m = re.match(r"(\d+) image row\(s\) absent from HTML$", w)
+    if m: return f"มีบรรทัดในรูป {m.group(1)} แถวที่ไม่มีในเนื้อเพลง (อาจมีเนื้อ/คอร์ดเกิน)"
+    m = re.match(r"line-count (\d+)≠(\d+) but OCR too garbled", w)
+    if m: return f"จำนวนบรรทัดไม่ตรง ({m.group(1)}≠{m.group(2)}) และรูปเบลอเกินกว่าจะจับคู่อัตโนมัติ — ต้องตรวจมือ"
+    m = re.match(r'instr leftover "(.+)" in:', w)
+    if m:
+        snip = m.group(1)
+        if len(snip) > 30: snip = snip[:30] + '…'
+        return f'มีข้อความแปลกปลอม "{snip}" หลุดเข้าท่อนดนตรี (Intro/Instru/Outro)'
+    if w.startswith('instr line lost its chords'):
+        return "ท่อนดนตรีอ่านคอร์ดไม่ออก (OCR พลาด) — ต้องกู้จากรูป"
+    return w
+
+
 def apply_overrides(text, ov):
     """Per-song manual corrections that survive every regen (written by the review editor /
     by hand). `rename` fixes a misread chord everywhere in the song; `replace` is an escape
@@ -618,6 +644,7 @@ def main():
     ap.add_argument('--raw', default='data/chordpro-raw', help='cached OCR intermediates (the EXPENSIVE asset)')
     ap.add_argument('--overrides', default='data/chordpro-overrides', help='per-song manual corrections (JSON)')
     ap.add_argument('--cache', default='scripts/.chordpro_cache', help='html+image fetch cache')
+    ap.add_argument('--vlm-dir', dest='vlm_dir', default='data/chordpro-vlm', help='verbatim VLM-extracted ChordPro (scripts/vlm_chordpro.py). Preferred over OCR assembly during regen so a VLM fix survives every rule rebuild and is never re-flagged.')
     gpu_grp = ap.add_mutually_exclusive_group()
     gpu_grp.add_argument('--gpu', dest='gpu', action='store_true', default=None,
                          help='force CUDA on (default: auto — on whenever CUDA is available)')
@@ -651,6 +678,10 @@ def main():
         p = os.path.join(args.overrides, f'{sid}.json')
         return json.load(open(p, encoding='utf-8')) if os.path.exists(p) else None
 
+    def load_vlm(sid):
+        p = os.path.join(args.vlm_dir, f'{sid}.txt')
+        return open(p, encoding='utf-8').read() if os.path.exists(p) else None
+
     # ---- regen / check: reprocess cached raw, no OCR ----
     if args.regen or args.check:
         if not ids:
@@ -658,6 +689,16 @@ def main():
             if args.limit is not None: ids = ids[:max(0, args.limit)]
         t0 = time.time(); flagged = []
         for sid in ids:
+            # A VLM re-extraction (scripts/vlm_chordpro.py) wins outright: use it verbatim,
+            # skip OCR assembly entirely, and never flag it. apply_overrides still stacks so a
+            # tiny manual patch can ride on top. This is what makes a VLM fix durable — a later
+            # rule-fix `chordpro:build` regenerates every song but leaves these untouched.
+            vlm = load_vlm(sid)
+            if vlm is not None:
+                text = apply_overrides(vlm, load_ov(sid))
+                open(os.path.join(args.out, f'{sid}.txt'), 'w', encoding='utf-8').write(text)
+                if args.show: print('\n' + text + '\n')
+                continue
             rp = os.path.join(args.raw, f'{sid}.json')
             if not os.path.exists(rp):
                 print(f'id={sid:<6} -- no raw cache (run extraction first)'); continue
@@ -670,7 +711,17 @@ def main():
         print(f'\nregenerated {len(ids)} songs from {args.raw} in {time.time() - t0:.1f}s (no OCR).')
         if args.check:
             rep = os.path.join(args.out, '_flagged.tsv')
-            open(rep, 'w', encoding='utf-8').write('\n'.join(f'{s}\t{" | ".join(w)}' for s, w in flagged))
+            # cols: id \t english reasons (dev/tooling) \t thai reasons (shipped to owner UI).
+            # vlm_chordpro.py + build-data.mjs both split on the FIRST tab, so the extra column
+            # is harmless to existing readers.
+            def th_join(w):                                   # dedup identical Thai phrasings,
+                seen, out = set(), []                          # keep order — collapses e.g. the
+                for x in w:                                    # same "off-vocab C#m" repeated 11×
+                    t = warn_th(x)
+                    if t not in seen: seen.add(t); out.append(t)
+                return ' | '.join(out)
+            rows = [f'{s}\t{" | ".join(w)}\t{th_join(w)}' for s, w in flagged]
+            open(rep, 'w', encoding='utf-8').write('\n'.join(rows))
             print(f'{len(flagged)} flagged → {rep}')
         return
 

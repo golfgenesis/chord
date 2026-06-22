@@ -4,6 +4,10 @@ export interface Song {
   /** Inline ChordPro text (chords-as-text). Present only for songs the offline
    *  pipeline has converted; when set, the app renders text instead of the image. */
   cp?: string;
+  /** Thai-language QA note for a song `chordpro:check` flagged as suspect (e.g.
+   *  "คอร์ด C อาจอ่านผิด"). Shipped for flagged songs only; rendered ONLY for
+   *  owners (OWNER_EMAILS) as an in-app tag — a soft QA aid, not secret data. */
+  flag?: string;
 }
 
 export interface RoomState {

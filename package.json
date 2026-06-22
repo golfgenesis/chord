@@ -22,6 +22,7 @@
     "chordpro:build": "py -3.11 scripts/extract_chordpro.py --regen && node scripts/build-data.mjs",
     "chordpro:regen": "py -3.11 scripts/extract_chordpro.py --regen",
     "chordpro:fix": "node scripts/regen.mjs",
+    "chordpro:vlm": "py -3.11 scripts/vlm_chordpro.py",
     "sync:chordpro": "py -3.11 scripts/sync.py --skip-build && py -3.11 scripts/backfill.py"
   },
   "dependencies": {

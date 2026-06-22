@@ -11,6 +11,7 @@ import { loadLocal, saveLocal } from "../lib/persist";
 import { useWakeLock } from "../hooks/useWakeLock";
 import { ChordOverlay } from "./ChordOverlay";
 import { ChordSheet } from "./ChordSheet";
+import { OwnerFlagTag } from "./OwnerFlagTag";
 import { NextSongDrawer } from "./NextSongDrawer";
 import type { Song } from "../types";
 import { runChordOCR, type OCRResult } from "../lib/chordOCR";
@@ -87,6 +88,13 @@ export function Fullscreen() {
   const parsedSheet = useMemo(
     () => (sheetSrc ? parseChordpro(sheetSrc) : null),
     [sheetSrc],
+  );
+  // QA flag (Thai) for this song, if `chordpro:check` marked it suspect. Shown only to owners
+  // at the bottom of the sheet (OwnerFlagTag). Read from the live songs list so a dev re-fix +
+  // reload reflects the cleared flag.
+  const flag = useMemo(
+    () => (song ? song.flag ?? songs.find((s) => s.id === song.id)?.flag : undefined),
+    [song, songs],
   );
   // Text mode whenever a ChordPro source exists — except the owner can force the
   // original image via the header toggle. Non-owners always get the text version.
@@ -696,12 +704,20 @@ export function Fullscreen() {
             in image mode it's h-full for object-contain centering. */}
         <div className={`relative w-full ${textMode ? "" : "h-full"}`}>
           {textMode ? (
-            <ChordSheet
-              sheet={parsedSheet!}
-              fromKey={fromKey}
-              toKey={toKey}
-              invert={invertImages}
-            />
+            <>
+              <ChordSheet
+                sheet={parsedSheet!}
+                fromKey={fromKey}
+                toKey={toKey}
+                invert={invertImages}
+              />
+              <OwnerFlagTag
+                songId={song.id}
+                flag={flag}
+                isOwner={isOwner}
+                invert={invertImages}
+              />
+            </>
           ) : (
             <>
           <img
