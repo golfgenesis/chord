@@ -51,6 +51,10 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 JSONL_PATH = os.path.join(DATA_DIR, "results.jsonl")
 FINAL_JSON_PATH = os.path.join(DATA_DIR, "results.json")
 ERRORS_PATH = os.path.join(LOGS_DIR, "scrape_errors.log")
+# Ids whose src passes looks_like_real_image() but actually serve an HTML
+# placeholder — discovered + written by download.py, excluded here so they
+# never re-enter results.json. See download.py:NO_IMAGE_IDS_PATH.
+NO_IMAGE_IDS_PATH = os.path.join(DATA_DIR, "no_image_ids.json")
 
 write_lock = threading.Lock()
 err_lock = threading.Lock()
@@ -185,6 +189,16 @@ def run_scrape():
     finalize_json()
 
 
+def load_no_image_ids():
+    """Ids confirmed to serve a non-image (HTML placeholder) at download time."""
+    if not os.path.exists(NO_IMAGE_IDS_PATH):
+        return set()
+    try:
+        return {int(x) for x in json.load(open(NO_IMAGE_IDS_PATH, encoding="utf-8"))}
+    except (json.JSONDecodeError, ValueError, OSError):
+        return set()
+
+
 def finalize_json():
     if not os.path.exists(JSONL_PATH):
         print("No results.jsonl to finalize.")
@@ -202,14 +216,19 @@ def finalize_json():
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
     # Keep only successful rows — drop nulls AND placeholder srcs like
-    # /img/nm/ that chordtabs returns for reserved-but-empty ids.
+    # /img/nm/ that chordtabs returns for reserved-but-empty ids. Also drop
+    # ids on the no-image blocklist (src looks real but serves HTML — only
+    # discoverable by actually fetching the image, which download.py does).
+    blocked = load_no_image_ids()
     items = [
         by_id[k] for k in sorted(by_id)
-        if looks_like_real_image(by_id[k].get("src"))
+        if k not in blocked and looks_like_real_image(by_id[k].get("src"))
     ]
+    excluded = sum(1 for k in by_id if k in blocked)
     with open(FINAL_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
-    print(f"Wrote {len(items):,} records to {FINAL_JSON_PATH}")
+    print(f"Wrote {len(items):,} records to {FINAL_JSON_PATH}"
+          + (f" ({excluded} no-image id(s) excluded)" if excluded else ""))
 
 
 def main():

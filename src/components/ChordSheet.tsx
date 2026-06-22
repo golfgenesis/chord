@@ -2,11 +2,13 @@ import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ParsedSheet, ChordSeg } from "../lib/chordpro";
 import { preferFlatsForKey, transposeChord } from "../lib/musicTheory";
 
-// Lyrics: Noto Sans Thai (looped, highly legible) → IBM Plex Sans Thai fallback.
-// Chords: Inter (clean, already loaded) bold — easier to read than monospace.
-// Both faces are loaded in index.html.
-const LYRIC_FONT = '"Noto Sans Thai", "IBM Plex Sans Thai", system-ui, sans-serif';
-const CHORD_FONT = '"Inter", system-ui, sans-serif';
+// Minimal look: Anuphan (Cadson Demak — clean, loopless, modern) for BOTH the Thai lyrics
+// and the Latin chord names, so the sheet reads as one cohesive minimal family. Chords stay
+// distinct via weight + accent colour, not a different typeface. Loaded in index.html.
+// To use a self-hosted face instead (e.g. FC Minimal / Supermarket), drop the .woff2 in
+// public/fonts/, add an @font-face in src/index.css, and put its name first below.
+const LYRIC_FONT = 'sans-serif';
+const CHORD_FONT = '"Anuphan", "Inter", system-ui, sans-serif';
 // One chord size everywhere (Intro/Instru rows AND the labels above lyrics) so chords
 // never look bigger on one line than another.
 const CHORD_EM = "0.82em";
@@ -16,6 +18,12 @@ const CHORD_EM = "0.82em";
 // when it reasonably can. GAP_MIN is the floor: below this, lines read as
 // cramped, so instead of compressing further we let the page scroll.
 const GAP_MIN = 0.4;
+// Enlarge the TEXT to fill the column (not stretch the gaps). SCALE_MAX caps how far a short/
+// narrow song scales UP — the whole sheet (text + its proportional line spacing) grows together
+// via the transform, so line gaps keep their normal ratio to the text, just bigger. The column
+// is capped at max-w-3xl, so desktop stays sensible. --gapK only ever COMPRESSES (long songs),
+// never stretches beyond the natural spacing.
+const SCALE_MAX = 2.6;
 
 // Nearest scrollable ancestor — its clientHeight is the height the sheet has to
 // fill (in fit mode the sheet sits inside Fullscreen's overflow-y-auto column).
@@ -76,35 +84,43 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
     const measure = () => {
       // 1) Width fit. Content width is gap-independent, but pin --gapK to 1
       //    first so the height reads below are taken at the known extreme.
+      // clientWidth INCLUDES the outer's horizontal padding (px-4 / sm:px-7), but the inner
+      // sits INSIDE that padding — so the width it can actually use is clientWidth − padX.
+      // Using the full clientWidth made `s` a hair too big, so the widest line overflowed by
+      // ~the right padding and `overflow:hidden` clipped the last word(s) ("รัก.." disappeared).
+      // Subtract padX (and a 1px guard) so the sheet truly fits and nothing is cut.
+      const cs = getComputedStyle(outer);
+      const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       inner.style.setProperty("--gapK", "1");
       const natW = inner.scrollWidth;
-      const availW = outer.clientWidth;
-      const s = natW > availW && natW > 0 ? availW / natW : 1;
+      const availW = outer.clientWidth - padX - 1;   // content area (clientWidth includes padding)
 
-      // 2) Vertical gap fit. Sheet height is LINEAR in --gapK (gaps are the
-      //    only thing that changes), so measure the two extremes and solve for
-      //    the gapK that makes the scaled sheet just fit the scroll viewport.
-      //    H(k) = H0 + k*(H1-H0); want H(k)*s + padY <= availH.
+      // 1) WIDTH scale — fill the column width, scaling UP as well as down (capped by SCALE_MAX),
+      //    so a short/narrow song uses the space instead of sitting tiny top-left. No bottom
+      //    floor → a too-wide line always scales down to fit (never clipped).
+      const s = natW > 0 ? Math.min(availW / natW, SCALE_MAX) : 1;
+
+      // 2) VERTICAL fit — keep NATURAL line spacing (--gapK = 1); only COMPRESS toward GAP_MIN
+      //    when a long song wouldn't otherwise fit. Never stretch beyond natural (a short song
+      //    keeps normal spacing and simply leaves space below, rather than spreading lines out).
+      //    H(k) = hTight + k*(hFull-hTight); want H(k)*s = availH - padY.
       const hFull = inner.scrollHeight; // --gapK = 1
       inner.style.setProperty("--gapK", "0");
       const hTight = inner.scrollHeight; // --gapK = 0 (gaps collapsed)
-      const cs = getComputedStyle(outer);
-      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       const sp = scrollParentOf(outer);
       const availH = sp ? sp.clientHeight : window.innerHeight;
 
       let k = 1;
       if (hFull > hTight + 0.5) {
         const want = ((availH - padY) / s - hTight) / (hFull - hTight);
-        k = Math.max(GAP_MIN, Math.min(1, want));
+        k = Math.max(GAP_MIN, Math.min(1, want));   // 1 = natural spacing; only compress, never stretch
       }
       inner.style.setProperty("--gapK", String(k));
 
-      // boxH is the OUTER height (border-box) so it must include the outer's own
-      // vertical padding (py-6) — otherwise the scaled inner + padding overflows
-      // and `overflow:hidden` clips the last line(s). When the song is still
-      // taller than availH at the gap floor, boxH > availH and the parent
-      // scrolls — exactly the intended fallback.
+      // boxH = the scaled content height + the outer's own vertical padding (border-box). When a
+      // long song is still taller than availH at the gap floor, boxH > availH and the parent
+      // scrolls (intended). When a short song fills via stretched gaps, boxH ≈ availH.
       const hPicked = hTight + k * (hFull - hTight);
       setScale(s);
       setGapK(k);
@@ -124,7 +140,7 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
   return (
     <div
       ref={outerRef}
-      className="mx-auto max-w-3xl px-4 py-6 sm:px-7"
+      className="mx-auto max-w-3xl px-3 py-2 sm:px-4"
       style={{ overflow: "hidden", height: fit ? boxH : undefined }}
     >
       <div
@@ -176,7 +192,10 @@ export function ChordSheet({ sheet, fromKey, toKey, invert, fit = true }: Props)
                   color: dim,
                   fontSize: CHORD_EM,
                   fontWeight: 600,
-                  margin: "calc(0.5em * var(--gapK, 1)) 0 calc(0.3em * var(--gapK, 1))",
+                  // Tight: an Intro/Instru/Outro block's own rows sit close together (the blank
+                  // line that used to separate them is gone — see emit_instr). Block-to-content
+                  // separation comes from the surrounding blank lines, not this margin.
+                  margin: "calc(0.16em * var(--gapK, 1)) 0",
                   letterSpacing: "0.01em",
                 }}
               >

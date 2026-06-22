@@ -1,0 +1,7 @@
+{
+  "_comment": "OCR garbled '/ C / F / ( 3' to junk (conf 0.0) on both passes — not recoverable by rules. Restored from the original image.",
+  "replace": [
+    ["Instru ( Times )", "Instru / [C] / [F] / ( 3 Times )"],
+    ["[Dm] / [G] /", "/ [C] / [F] / [Dm] / [G] /"]
+  ]
+}

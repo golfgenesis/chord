@@ -18,6 +18,12 @@ npm run sync:push    # same as above, then git add/commit/push public/songs.bin
 npm run sync:dry     # print every step's command without running (skips probe)
 npm run check        # cross-check results.json ↔ images/ ↔ R2 bucket (pretty console)
 npm run check:clean  # delete orphan WebP files locally + on R2 (asks confirmation)
+
+# ChordPro text pipeline (chord-sheet images → inline ChordPro text) — see below
+npm run chordpro:backfill   # ⭐ OCR ALL un-extracted songs in parallel (resumable; Ctrl+C to stop)
+npm run chordpro:check      # regen all from cache + flag suspect songs → data/chordpro/_flagged.tsv
+npm run chordpro:fix -- 19  # regen song(s) 19 (+ its override) and rebuild songs.bin
+npm run chordpro:build      # regen ALL from cache + rebuild songs.bin (after a rule-fix)
 ```
 
 No test suite exists; verification is type-check + lint + manual browser testing.
@@ -141,6 +147,30 @@ Don't try to proxy `/__/auth/*` through Cloudflare Pages Functions to keep every
 - `scripts/pipeline.ps1` — older PowerShell wrapper. Only runs upload + build + push (no scrape/download/convert) and uses `py` autodetect. **`sync.py` supersedes it for the full pipeline**; `pipeline.ps1` is kept for back-compat with anyone who has scripts wired into it.
 - **Do NOT add `publish.ps1` or `check_missing.py` back** — both were removed because they built/checked the legacy `songs.json` (no longer exists), and the `file` field they referenced was never written by the current `build-data.mjs`.
 - Sequencing when adding new songs (manually, if not using `sync.py`): `scrape.py` → `download.py` (PNG) → `sync_names.py` (still PNG-stage) → `convert_to_webp.py` (PNG→WebP, deletes source) → `upload_r2.py images/` → `check_sync.py` → `node scripts/build-data.mjs`. Running `sync_names.py` after conversion will report 70k "missing" files because it only knows about `.png`.
+
+## ChordPro text pipeline (chord-sheet images → inline ChordPro text)
+
+Migrating the app off chord-sheet **images** onto **ChordPro text** so the client renders text +
+transposes (no images). Full handoff: **[scripts/CHORDPRO_PIPELINE.md](scripts/CHORDPRO_PIPELINE.md)** — read it before changing extraction. Code: [scripts/extract_chordpro.py](scripts/extract_chordpro.py); renderer [src/components/ChordSheet.tsx](src/components/ChordSheet.tsx) + parser [src/lib/chordpro.ts](src/lib/chordpro.ts); `build-data.mjs` bundles each `data/chordpro/<id>.txt` as a `cp` field on the song in `songs.bin`, and `Fullscreen` shows text whenever a song has one (falls back to the image otherwise — so going public before the backfill finishes is fine).
+
+**Two-stage, re-runnable design** (so a late-found bug never means re-OCRing 70k):
+- `ocr_raw(id)` — **EXPENSIVE** (~45-55s/song CPU): fetch page+image, run EasyOCR → a JSON raw intermediate cached to `data/chordpro-raw/<id>.json`. The only step that needs OCR.
+- `assemble(raw, overrides)` — **CHEAP** (ms): all the *rules* (chord grammar, vocab repair, `align_lyrics`, `fmt_instr`, placement). Re-runnable over every cached raw via `--regen`.
+
+So: a **rule bug → fix code + regen** (minutes, no OCR); a **one-off misread → a per-song override + regen** (instant); only a **detection change** needs re-OCR (`--force <id>`, from the cached image).
+
+**Key facts**
+- Lyrics come from the page **HTML** (perfect Thai, zero OCR); OCR only reads chord **names + x-positions**. `align_lyrics` fuzzy-matches HTML lines ↔ image OCR rows so chords land on the right line when the two disagree on which lines exist (was the main "ตำแหน่งไม่ตรง" cause).
+- GPU is a **dead end on this box** (AMD RX 6600 XT, no CUDA; EasyOCR's LSTM won't run on DirectML). CPU only — hence the parallel backfill.
+- `data/chordpro-overrides/<id>.json` (committed) = per-song manual fixes (`rename`/`replace`/`title`/`note`), applied during regen, survive every rule change. See its README.
+- Determinism: `snap_vocab` sorts vocab; `main()` forces utf-8 stdout (Windows cp1252 consoles crashed on Thai/`⚠` prints).
+
+**Fix workflow (find → fix → ship)**
+1. `npm run chordpro:check` → `data/chordpro/_flagged.tsv` lists suspect songs + a categorized reason (`instr leftover`, `N HTML line(s) not drawn in image`, `off-vocab`, `low-confidence`, …). Compare the text against the cached original at `scripts/.chordpro_cache/<id>.png`.
+2. **Pattern bug** (affects many) → fix the rule in `extract_chordpro.py` → `npm run chordpro:build` (regen ALL + rebuild). **One-off** → edit `data/chordpro-overrides/<id>.json` → `npm run chordpro:fix -- <id>` (regen that song + rebuild).
+3. `npm run dev`, then **Ctrl+Shift+R** (the service worker caches the old `songs.bin`).
+
+**Fix at the root cause, not per-song** — the same OCR failure repeats as a pattern across many of the 70k; fix the rule/detection so the whole pattern improves, and reach for an override only for the truly song-specific residue. `chordpro:check` only *flags*; it never fixes.
 
 ## Sync API contract
 

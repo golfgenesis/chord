@@ -20,6 +20,6 @@ Instru / [Amaj7] / [E] / [F#m] / [Esus4] [E] /
 
 ( *, ** )
 
-Instru / [Amaj7] / [E] / [F#m] / [D] / ( 2 Times ) / Amajz /
+Instru / [Amaj7] / [E] / [F#m] / [D] / ( 2 Times ) / [Amaj7] /
 
 ฉันอยากลืม

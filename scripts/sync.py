@@ -265,6 +265,13 @@ def main() -> None:
         ]))
     if not args.skip_download:
         steps.append(Step("Download PNGs", [py, SCRIPTS / "download.py"]))
+        # download.py appends ids that served an HTML placeholder (not a real
+        # image) to data/no_image_ids.json. Re-finalise so those drop out of
+        # results.json BEFORE verify — otherwise they'd fail the
+        # results.json ↔ images ↔ R2 cross-check one cycle later.
+        steps.append(Step("Re-finalize (drop no-image ids found at download)", [
+            py, SCRIPTS / "scrape.py", "--finalize",
+        ]))
     if not args.skip_sync_names:
         # Apply alt ↔ filename rectification BEFORE conversion (sync_names
         # only knows about .png; running it after the convert step would

@@ -47,6 +47,13 @@ RESULTS_JSON = os.path.join(DATA_DIR, "results.json")
 ERRORS_PATH = os.path.join(LOGS_DIR, "download_errors.log")
 OUT_DIR = os.path.join(PROJECT_ROOT, "images")
 
+# Committed blocklist of ids whose `src` looks like a real image but actually
+# serves an HTML placeholder (the source returns 200+HTML, not a 404, for songs
+# that have no chord image). scrape.finalize_json() reads this to keep them out
+# of results.json permanently — otherwise they resurrect on every re-finalise
+# because their src passes looks_like_real_image().
+NO_IMAGE_IDS_PATH = os.path.join(DATA_DIR, "no_image_ids.json")
+
 WORKERS = 8
 REQUEST_TIMEOUT = 30
 RETRIES = 2
@@ -55,11 +62,49 @@ CHUNK = 64 * 1024
 INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 err_lock = threading.Lock()
 
+# chordtabs.in.th serves an HTTP-200 HTML placeholder (not a 404) when a song
+# has no chord image. Those used to be saved verbatim as `.png` and only blew
+# up later at convert time (cwebp: WIC decode failed). Reject non-images at the
+# download boundary instead. Magic-byte check covers servers that lie about
+# Content-Type.
+_IMAGE_MAGICS = (
+    b"\x89PNG\r\n\x1a\n",  # png
+    b"\xff\xd8\xff",        # jpg
+    b"GIF87a", b"GIF89a",   # gif
+    b"BM",                  # bmp
+)
+
+
+def _looks_like_image_bytes(head: bytes) -> bool:
+    if any(head.startswith(m) for m in _IMAGE_MAGICS):
+        return True
+    return head[:4] == b"RIFF" and head[8:12] == b"WEBP"  # webp
+
 
 def log_error(msg):
     with err_lock:
         with open(ERRORS_PATH, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
+
+
+def record_no_image_ids(ids):
+    """Merge newly-discovered non-image ids into the committed blocklist.
+    Single-writer (called once at end of run), atomic write."""
+    ids = {int(i) for i in ids}
+    if not ids:
+        return None
+    existing = set()
+    if os.path.exists(NO_IMAGE_IDS_PATH):
+        try:
+            existing = {int(x) for x in json.load(open(NO_IMAGE_IDS_PATH, encoding="utf-8"))}
+        except (json.JSONDecodeError, ValueError, OSError):
+            existing = set()
+    merged = sorted(existing | ids)
+    tmp = NO_IMAGE_IDS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, NO_IMAGE_IDS_PATH)
+    return merged
 
 
 def clean_alt(alt: str) -> str:
@@ -129,10 +174,23 @@ def download_one(session, record, fname, out_dir, existing_stems):
                 if r.status_code == 404:
                     return ("404", record["id"], url)
                 r.raise_for_status()
+                # Bail early on an HTML placeholder before pulling the body.
+                ctype = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
+                if ctype and not ctype.startswith("image/"):
+                    log_error(f"NOTIMG id={record['id']} url={url} content-type={ctype}")
+                    return ("notimg", record["id"], f"{url} (Content-Type: {ctype})")
                 with open(tmp_path, "wb") as f:
                     for chunk in r.iter_content(CHUNK):
                         if chunk:
                             f.write(chunk)
+            # Belt-and-suspenders: confirm real image magic bytes regardless of
+            # what the server claimed in Content-Type.
+            with open(tmp_path, "rb") as f:
+                head = f.read(16)
+            if not _looks_like_image_bytes(head):
+                os.remove(tmp_path)
+                log_error(f"NOTIMG id={record['id']} url={url} non-image bytes")
+                return ("notimg", record["id"], f"{url} (non-image bytes)")
             os.replace(tmp_path, out_path)
             return ("ok", record["id"], out_path)
         except (requests.RequestException, OSError) as e:
@@ -180,7 +238,8 @@ def run(test_n=None, workers=WORKERS):
         return
 
     session = make_session()
-    counts = {"ok": 0, "skip": 0, "fail": 0, "404": 0}
+    counts = {"ok": 0, "skip": 0, "fail": 0, "404": 0, "notimg": 0}
+    notimg_ids: set[int] = set()
     started = time.time()
     done = 0
 
@@ -192,6 +251,8 @@ def run(test_n=None, workers=WORKERS):
                 r, fname = futs[fut]
                 status, ident, info = fut.result()
                 counts[status] = counts.get(status, 0) + 1
+                if status == "notimg":
+                    notimg_ids.add(ident)
                 done += 1
                 if test_n is not None or done % 200 == 0 or done == len(pending):
                     elapsed = time.time() - started
@@ -201,6 +262,7 @@ def run(test_n=None, workers=WORKERS):
                         f"[{done:,}/{len(pending):,}] "
                         f"ok={counts['ok']} skip={counts['skip']} "
                         f"fail={counts.get('fail',0)} 404={counts.get('404',0)} "
+                        f"notimg={counts.get('notimg',0)} "
                         f"rate={rate:.1f}/s eta={eta/60:.1f}min",
                         flush=True,
                     )
@@ -214,9 +276,16 @@ def run(test_n=None, workers=WORKERS):
     print()
     print(f"Done in {elapsed/60:.1f} min — "
           f"ok={counts['ok']:,}  skip={counts['skip']:,}  "
-          f"fail={counts.get('fail',0):,}  404={counts.get('404',0):,}")
+          f"fail={counts.get('fail',0):,}  404={counts.get('404',0):,}  "
+          f"notimg={counts.get('notimg',0):,}")
     if counts.get("fail", 0):
         print(f"See {ERRORS_PATH} for failed records — re-running will retry them.")
+    if counts.get("notimg", 0):
+        merged = record_no_image_ids(notimg_ids)
+        n = len(merged) if merged else 0
+        print(f"{counts['notimg']:,} record(s) returned a non-image (HTML placeholder) — "
+              f"added to {NO_IMAGE_IDS_PATH} (now {n:,} ids). "
+              f"Re-run scrape.py --finalize to drop them from results.json.")
 
 
 def main():

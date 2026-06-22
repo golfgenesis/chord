@@ -20,7 +20,7 @@ Instru [D] / [A]
 
 ( *, ** )
 
-Instru [D] / [A] / [F#m] / [E]/[D]/[D]/[E]/[E]
+Instru [D] / [A] / [F#m] / [E] / [D] / [D] / [E] / [E]
 
 ( ** )
 
