@@ -21,6 +21,7 @@ import { useVisibleSongs } from "../hooks/useVisibleSongs";
 import { useCachedSongIds } from "../lib/offlineDownload";
 import type { Song } from "../types";
 import { PlusIcon, TrashIcon } from "./icons";
+import { GearFooter } from "./GearCTA";
 
 export function SongList() {
   const songs = useVisibleSongs();
@@ -123,6 +124,10 @@ export function SongList() {
         computeItemKey={(_i, song) => song.id}
         increaseViewportBy={400}
         atTopStateChange={(atTop) => setShowScrollTop(!atTop)}
+        // Affiliate gear CTA at the very bottom of the list (browse surface
+        // only — never the chord view). Out of the way on the long list;
+        // visible after the last song on short favorites/search lists.
+        components={{ Footer: GearFooter }}
       />
       <ScrollTopButton visible={showScrollTop} onClick={scrollToTop} />
     </>

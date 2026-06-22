@@ -702,7 +702,7 @@ export function Fullscreen() {
             overlay coordinates resolve against the same box. In text mode the
             wrapper is height-auto so the container can scroll the full sheet;
             in image mode it's h-full for object-contain centering. */}
-        <div className={`relative w-full ${textMode ? "" : "h-full"}`}>
+        <div className={`relative w-full ${textMode ? "flex min-h-full flex-col" : "h-full"}`}>
           {textMode ? (
             <>
               <ChordSheet
@@ -711,6 +711,15 @@ export function Fullscreen() {
                 toKey={toKey}
                 invert={invertImages}
               />
+              {/* Flexible spacer: grows to push the owner QA footer to the bottom of
+                  the viewport when the sheet is shorter than the screen, and collapses
+                  to a fixed gap (min-h-6) so the footer simply follows the last lyric
+                  line when the sheet overflows. The min-h-full + flex-col on the wrapper
+                  is what gives this free space to distribute. Only rendered when the
+                  footer itself is (owner + flag) — others keep the plain content flow. */}
+              {isOwner && flag && (
+                <div className="min-h-6 flex-1" aria-hidden="true" />
+              )}
               <OwnerFlagTag
                 songId={song.id}
                 flag={flag}

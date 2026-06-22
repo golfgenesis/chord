@@ -96,6 +96,18 @@ function parseUrlPath(
   return { roomCode: m[1], songId: m[2] ? Number(m[2]) : null };
 }
 
+// Public SEO landing path: `/song/<id>[/<slug>]`. These are the crawlable pages
+// rendered at the edge (functions/song/[[path]].js). The slug is decorative —
+// only the numeric id resolves the song. Distinct from room URLs (rooms are
+// strictly 6 digits, so the `/song/` prefix can never collide). Returns the
+// song id so init() can deep-link into the EXISTING fullscreen view, exactly
+// like a `/<room>/<songId>` link does — the in-app UI is unchanged.
+const SONG_LANDING_RE = /^\/song\/(\d+)(?:\/|$)/;
+function parseSongLandingPath(pathname: string): number | null {
+  const m = pathname.match(SONG_LANDING_RE);
+  return m ? Number(m[1]) : null;
+}
+
 function urlPathFor(roomCode: string, songId: number | null): string {
   return songId !== null ? `/${roomCode}/${songId}` : `/${roomCode}`;
 }
@@ -503,7 +515,11 @@ export const useApp = create<State>((set, get) => {
     //            /<room>/<songId>   → room + open this song in fullscreen
     // (anything else falls through to localStorage / random)
     const urlParsed = parseUrlPath(window.location.pathname);
-    const urlSongId = urlParsed?.songId ?? null;
+    // A `/song/<id>` landing (from Google / a shared SEO link) deep-links into
+    // the same fullscreen view as a `/<room>/<songId>` link. The room stays
+    // whatever's local/random; the URL-normalize below then rewrites the address
+    // bar to `/<room>/<id>` with the song open, reusing the urlSongId path.
+    const urlSongId = urlParsed?.songId ?? parseSongLandingPath(window.location.pathname);
     // urlForcedRoom: the user landed on this device via a shared link, so
     // their URL choice MUST beat whatever stale roomCode is sitting in this
     // client's Firestore doc from a previous session. Without this, the
@@ -530,13 +546,16 @@ export const useApp = create<State>((set, get) => {
     // changes, song open/close), so reconcile both against current state.
     window.addEventListener("popstate", () => {
       const parsed = parseUrlPath(window.location.pathname);
-      if (!parsed) return;
-      if (parsed.roomCode !== get().roomCode) get().setRoomCode(parsed.roomCode);
+      // Back/forward can also land on a public `/song/<id>` URL.
+      const landingSongId = parsed ? null : parseSongLandingPath(window.location.pathname);
+      if (!parsed && landingSongId === null) return;
+      if (parsed && parsed.roomCode !== get().roomCode) get().setRoomCode(parsed.roomCode);
+      const songId = parsed ? parsed.songId : landingSongId;
       const cur = get().viewing;
-      if (parsed.songId === null && cur) {
+      if (songId === null && cur) {
         set({ viewing: null });
-      } else if (parsed.songId !== null && (!cur || cur.id !== parsed.songId)) {
-        const song = get().byId.get(parsed.songId);
+      } else if (songId !== null && (!cur || cur.id !== songId)) {
+        const song = get().byId.get(songId);
         if (song) {
           preloadSongImage(song);
           set({ viewing: song });

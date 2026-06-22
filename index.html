@@ -14,12 +14,27 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Chord" />
 
-    <!-- Private tool: block search engines and rich-link previews. -->
-    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex" />
-    <meta name="googlebot" content="noindex, nofollow" />
-    <meta name="referrer" content="no-referrer" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
 
-    <title>Chord</title>
+    <!-- seo:start — the /song/* edge function (functions/song/[[path]].js) swaps
+         everything between these two markers for per-song tags. The defaults below
+         are the HOMEPAGE's tags. Keep the markers byte-exact or the swap no-ops. -->
+    <title>คอร์ดเพลง ค้นหาคอร์ดกีตาร์ อูคูเลเล่ ฟรี | Chord</title>
+    <meta name="description" content="ค้นหาคอร์ดเพลงไทยและสากลกว่า 70,000 เพลง พร้อมเนื้อร้อง เปลี่ยนคีย์ (transpose) ได้ทันที เล่นพร้อมวงแบบเรียลไทม์ ใช้ฟรี ไม่ต้องสมัคร" />
+    <link rel="canonical" href="https://chord.golfchairat.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Chord" />
+    <meta property="og:title" content="คอร์ดเพลง ค้นหาคอร์ดกีตาร์ อูคูเลเล่ ฟรี | Chord" />
+    <meta property="og:description" content="ค้นหาคอร์ดเพลงไทย-สากลกว่า 70,000 เพลง เปลี่ยนคีย์ได้ทันที ใช้ฟรี ไม่ต้องสมัคร" />
+    <meta property="og:url" content="https://chord.golfchairat.com/" />
+    <meta property="og:image" content="https://chord.golfchairat.com/icon-512.png" />
+    <meta property="og:locale" content="th_TH" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="คอร์ดเพลง ค้นหาคอร์ดกีตาร์ อูคูเลเล่ ฟรี | Chord" />
+    <meta name="twitter:description" content="ค้นหาคอร์ดเพลงไทย-สากลกว่า 70,000 เพลง เปลี่ยนคีย์ได้ทันที ใช้ฟรี" />
+    <meta name="twitter:image" content="https://chord.golfchairat.com/icon-512.png" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://chord.golfchairat.com/#website","url":"https://chord.golfchairat.com/","name":"Chord","description":"ค้นหาคอร์ดเพลงไทยและสากลกว่า 70,000 เพลง เปลี่ยนคีย์ได้ทันที ใช้ฟรี","inLanguage":"th-TH","potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://chord.golfchairat.com/?q={search_term_string}"},"query-input":"required name=search_term_string"}},{"@type":"Organization","@id":"https://chord.golfchairat.com/#org","name":"Chord","url":"https://chord.golfchairat.com/","logo":"https://chord.golfchairat.com/icon-512.png"}]}</script>
+    <!-- seo:end -->
 
     <!-- Kick off the songs payload download in parallel with the JS bundle.
          Without this, fetch("/songs.bin") only starts after main.tsx parses
@@ -40,14 +55,14 @@
          <noscript> fallback keeps fonts working when JS is disabled. -->
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap"
       media="print"
       onload="this.media='all'"
     />
     <noscript>
       <link
         rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap"
       />
     </noscript>
 
@@ -102,6 +117,7 @@
         <div class="boot-splash__title">Chord</div>
         <div class="boot-splash__hint">กำลังเปิดแอป...</div>
       </div>
+      <!-- ssr -->
     </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

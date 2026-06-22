@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import "./index.css";
 import App from "./App.tsx";
+import { initAnalytics } from "./lib/analytics";
 
 // How often (ms) to ping the SW endpoint and ask the browser to check for
 // an updated worker. Chrome already does this on every navigation + every
@@ -86,3 +87,7 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </StrictMode>,
 );
+
+// Google Analytics — self-deferred to browser idle (see lib/analytics.ts), so
+// this call never delays mount. No-op in dev.
+initAnalytics();

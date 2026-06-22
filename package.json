@@ -23,7 +23,10 @@
     "chordpro:regen": "py -3.11 scripts/extract_chordpro.py --regen",
     "chordpro:fix": "node scripts/regen.mjs",
     "chordpro:vlm": "py -3.11 scripts/vlm_chordpro.py",
-    "sync:chordpro": "py -3.11 scripts/sync.py --skip-build && py -3.11 scripts/backfill.py"
+    "sync:chordpro": "py -3.11 scripts/sync.py --skip-build && py -3.11 scripts/backfill.py",
+    "sitemap": "node scripts/build-sitemap.mjs",
+    "seo:indexnow": "node scripts/indexnow.mjs",
+    "seo:social": "node scripts/social-post.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

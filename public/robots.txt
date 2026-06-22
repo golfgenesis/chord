@@ -1,2 +1,8 @@
+# chord.golfchairat.com — public.
+# The site went public for SEO; per-song landing pages live at /song/<id>/<slug>
+# and are listed in the sitemap. Room/app-state URLs (/<6-digit-room>[/<songId>])
+# are not content — they're unguessable and unlinked, so crawlers never reach them.
 User-agent: *
-Disallow: /
+Allow: /
+
+Sitemap: https://chord.golfchairat.com/sitemap.xml

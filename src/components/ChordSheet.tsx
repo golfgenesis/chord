@@ -1,14 +1,16 @@
 import type { ParsedSheet, ChordSeg } from "../lib/chordpro";
 import { preferFlatsForKey, transposeChord } from "../lib/musicTheory";
 
-// System font for the whole sheet: the device's native UI typeface (San Francisco
-// on Apple, Segoe UI on Windows, Roboto on Android) — all carry Thai glyphs, so the
-// lyrics and chord names render in one cohesive family with no web-font download.
-// Chords stay distinct via weight + accent colour, not a different typeface.
-const SYSTEM_FONT =
+// Sarabun for the whole sheet: a plain, loop-style (หัวกลม) Thai sans-serif — the
+// free, readable equivalent of the Tahoma/TH-Sarabun face the original chordtabs.in.th
+// chord-sheet images used. It carries both Thai and Latin glyphs, so lyrics and chord
+// names render in one cohesive family that matches the source image. Chords stay
+// distinct via weight + accent colour, not a different typeface. Loaded async from
+// Google Fonts in index.html; the system stack is the fallback while it streams.
+const SHEET_FONT =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Noto Sans Thai", sans-serif';
-const LYRIC_FONT = SYSTEM_FONT;
-const CHORD_FONT = SYSTEM_FONT;
+const LYRIC_FONT = SHEET_FONT;
+const CHORD_FONT = SHEET_FONT;
 // One chord size everywhere (Intro/Instru rows AND the labels above lyrics) so chords
 // never look bigger on one line than another.
 const CHORD_EM = "0.82em";

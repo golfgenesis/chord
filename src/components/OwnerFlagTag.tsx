@@ -58,43 +58,69 @@ export function OwnerFlagTag({
   };
 
   const amber = invert ? "#fcd34d" : "#b45309";
-  const amberBg = invert ? "rgba(252,211,77,0.12)" : "rgba(180,83,9,0.08)";
-  const amberBorder = invert ? "rgba(252,211,77,0.3)" : "rgba(180,83,9,0.25)";
+  const amberBorder = invert ? "rgba(252,211,77,0.32)" : "rgba(180,83,9,0.22)";
+  // Warm amber wash with a gentle top-to-bottom gradient so the full-width band reads as
+  // a deliberate footer panel, not a flat block. One per mode so it sits well on both the
+  // white chord paper and the inverted black one.
+  const cardBg = invert
+    ? "linear-gradient(180deg, rgba(44,35,16,0.96) 0%, rgba(30,24,11,0.98) 100%)"
+    : "linear-gradient(180deg, #fffaf2 0%, #fff3e3 100%)";
 
+  // Full-bleed (เต็มความกว้างจอ) footer panel at the very end of the sheet — NOT sticky;
+  // the owner reaches it by scrolling to the bottom. A top hairline + upward shadow lift
+  // it off the chord text; content is centred in a readable column inside the band.
   return (
     <div
-      className="mx-auto mt-6 mb-2 max-w-3xl rounded-lg px-3 py-2.5 text-[13px] leading-relaxed sm:px-4"
-      style={{ color: amber, background: amberBg, border: `1px solid ${amberBorder}` }}
+      className="w-full rounded-t-xl border-t px-3 pt-2.5 sm:px-5"
+      style={{
+        color: amber,
+        background: cardBg,
+        borderColor: amberBorder,
+        boxShadow: invert
+          ? "0 -8px 24px -16px rgba(0,0,0,0.7)"
+          : "0 -8px 24px -16px rgba(180,83,9,0.3)",
+        // The scroll container already pads its bottom by var(--safe-bottom); pull the
+        // band down over that strip (negative margin) and re-add it as our own padding so
+        // the amber bg hugs the screen edge while the text stays clear of the home bar.
+        marginBottom: "calc(-1 * var(--safe-bottom))",
+        paddingBottom: "calc(var(--safe-bottom) + 10px)",
+      }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-start gap-2">
-        <span aria-hidden="true">⚠</span>
-        <div className="flex-1">
-          <div className="font-medium">ปัญหาที่ตรวจพบ (เห็นเฉพาะเจ้าของ)</div>
-          <div className="mt-0.5 opacity-90">{flag}</div>
+      <div className="mx-auto max-w-3xl text-[11.5px] leading-snug">
+        {/* Text on the left, fix button on the right. min-w-0 lets the flag text
+            wrap instead of squeezing the button off-screen. */}
+        <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-start gap-2">
+            <span aria-hidden="true" className="text-[12px] leading-[1.4]">⚠</span>
+            <div className="min-w-0">
+              <div className="font-semibold tracking-tight">ปัญหาที่ตรวจพบ (เห็นเฉพาะเจ้าของ)</div>
+              <div className="mt-0.5 opacity-85">{flag}</div>
+            </div>
+          </div>
 
           {import.meta.env.DEV && canFix && (
-            <div className="mt-2.5 flex items-center gap-2">
-              <button
-                onClick={runFix}
-                disabled={state === "running"}
-                className="rounded-md px-3 py-1.5 text-[13px] font-semibold transition active:scale-95 disabled:opacity-60"
-                style={{ color: invert ? "#0a0a0a" : "#fff", background: amber }}
-              >
-                {state === "running" ? "กำลังแก้ด้วย AI…" : "แก้ด้วย AI (VLM)"}
-              </button>
-              {state === "running" && (
-                <span className="text-[12px] opacity-75">~20–40 วินาที แล้วหน้าจะรีโหลด</span>
-              )}
-            </div>
-          )}
-
-          {state === "error" && (
-            <div className="mt-2 whitespace-pre-wrap break-words text-[12px] opacity-80">
-              แก้ไม่สำเร็จ: {err}
-            </div>
+            <button
+              onClick={runFix}
+              disabled={state === "running"}
+              className="shrink-0 rounded-md px-2.5 py-1.5 text-[11.5px] font-semibold shadow-sm transition active:scale-95 disabled:opacity-60"
+              style={{ color: invert ? "#0a0a0a" : "#fff", background: amber }}
+            >
+              {state === "running" ? "กำลังแก้…" : "แก้ด้วย AI (VLM)"}
+            </button>
           )}
         </div>
+
+        {state === "running" && (
+          <div className="mt-1.5 text-right text-[11px] opacity-75">
+            ~20–40 วินาที แล้วหน้าจะรีโหลด
+          </div>
+        )}
+        {state === "error" && (
+          <div className="mt-1.5 whitespace-pre-wrap break-words text-[11px] opacity-80">
+            แก้ไม่สำเร็จ: {err}
+          </div>
+        )}
       </div>
     </div>
   );
