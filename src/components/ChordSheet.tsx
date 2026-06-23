@@ -60,7 +60,7 @@ export function ChordSheet({ sheet, fromKey, toKey, invert }: Props) {
 
         {sheet.lines.map((line, i) => {
           if (line.kind === "blank") {
-            return <div key={i} style={{ height: "1.15em" }} aria-hidden="true" />;
+            return <div key={i} style={{ height: "0.6em" }} aria-hidden="true" />;
           }
           if (line.kind === "chords") {
             return (
@@ -135,7 +135,7 @@ function LyricLine({
         // The chord label lives INSIDE the column (block above its word), not in this
         // margin, so a chord never collides with the line above — and lineHeight 1.2
         // keeps the text itself readable.
-        margin: hasChord ? "0.55em 0 0.14em" : "0.14em 0",
+        margin: hasChord ? "0.3em 0 0.1em" : "0.1em 0",
         paddingLeft: lead ? `${lead * 0.5}ch` : undefined,
         whiteSpace: "normal",
         wordBreak: "normal",
