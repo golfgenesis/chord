@@ -41,8 +41,11 @@ export type SheetLine =
   | { kind: "lyric"; segments: ChordSeg[] }
   // A chord-only row (Intro / Instru / section headers): chords render
   // inline on a single mono row, interleaved with the literal separators
-  // and labels exactly as written.
-  | { kind: "chords"; tokens: RowToken[] }
+  // and labels exactly as written. `indent`, when set, is a label prefix
+  // (e.g. "Intro / ") rendered as an invisible spacer so a CONTINUATION row
+  // of a multi-line labelled block aligns under the first chord of the row
+  // above instead of under the word "Intro" — see the run-detection pass below.
+  | { kind: "chords"; tokens: RowToken[]; indent?: string }
   // Vertical breathing room between blocks.
   | { kind: "blank" };
 
@@ -179,6 +182,32 @@ export function parseChordpro(src: string): ParsedSheet {
     } else {
       lines.push({ kind: "lyric", segments: toSegments(tokens) });
     }
+  }
+
+  // Hanging indent for multi-row LABELLED instrumental blocks. A run of consecutive
+  // chord-only rows whose first row opens with a section label ("Intro / ", "Outro / ",
+  // "Instru / ") gets every CONTINUATION row aligned under the FIRST CHORD of the lead
+  // row — by ghost-indenting it with that label prefix — so the block reads as one
+  // aligned unit instead of every row jammed to the left under the word "Intro". Mirrors
+  // how the source chord sheets draw these. Unlabelled multi-row blocks already start at
+  // column 0 on every row, so they need no indent.
+  for (let i = 0; i < lines.length; ) {
+    if (lines[i].kind !== "chords") { i++; continue; }
+    let j = i;
+    while (j < lines.length && lines[j].kind === "chords") j++;
+    if (j - i > 1) {
+      const lead = lines[i] as Extract<SheetLine, { kind: "chords" }>;
+      const firstChord = lead.tokens.findIndex((t) => t.type === "chord");
+      const prefix =
+        firstChord > 0 ? lead.tokens.slice(0, firstChord).map((t) => t.value).join("") : "";
+      SECTION_LABEL_RE.lastIndex = 0; // the regex is /g/ — reset before .test()
+      if (prefix && SECTION_LABEL_RE.test(prefix)) {
+        for (let k = i + 1; k < j; k++) {
+          (lines[k] as Extract<SheetLine, { kind: "chords" }>).indent = prefix;
+        }
+      }
+    }
+    i = j;
   }
 
   let sourceKey: Semitone | null = null;

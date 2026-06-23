@@ -79,6 +79,15 @@ export function ChordSheet({ sheet, fromKey, toKey, invert }: Props) {
                   letterSpacing: "0.01em",
                 }}
               >
+                {line.indent && (
+                  // Invisible copy of the lead row's label ("Intro / ") — same font, size
+                  // and weight as the real prefix above, so this continuation row's first
+                  // chord lands EXACTLY under the lead row's first chord (font-independent,
+                  // no space-counting). visibility:hidden keeps the width but hides the ink.
+                  <span aria-hidden="true" style={{ visibility: "hidden" }}>
+                    {line.indent}
+                  </span>
+                )}
                 {line.tokens.map((t, j) =>
                   t.type === "chord" ? (
                     <span key={j} style={{ color: ink, fontWeight: 700 }}>
