@@ -16,6 +16,9 @@ function pickFeatured(): GearProduct {
   return GEAR[Math.floor(Math.random() * GEAR.length)];
 }
 
+// TEMP: ads hidden for now. Flip back to `false` to re-enable the GearFooter CTA.
+const HIDE_ADS = true;
+
 export function GearFooter() {
   // Picked once per mount; dismiss hides it for this session (re-shows on reload).
   const [item] = useState(pickFeatured);
@@ -24,7 +27,7 @@ export function GearFooter() {
 
   // Premium = ad-free. Still reserve the safe-area inset at the list bottom so
   // the last song row never tucks under the home indicator.
-  if (premium || dismissed) return <div style={{ height: "var(--safe-bottom)" }} />;
+  if (HIDE_ADS || premium || dismissed) return <div style={{ height: "var(--safe-bottom)" }} />;
 
   return (
     <div className="px-3 pb-[calc(0.875rem+var(--safe-bottom))] pt-2">
