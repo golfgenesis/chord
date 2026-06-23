@@ -1,7 +1,7 @@
 {title: เพียงกระซิบ Black Head}
 {note: Tune down ½ tone to Eb}
 
-Intro / [D] / [F#m] / [Bm] / [G] [A] / ( 2 Times ) [D]
+Intro / [D] / [F#m] / [Bm] / [G] [A] / ( Times ) [D]
 
   [D]เพียง   [F#m]กระซิบบอก [G]บอก[A]ฉันสัก[D]คำ
   [G]เธอไม่[A]รัก ไม่[F]อยาก[F#m]จดจำ [Bm]จำ[Em]จด  [A]ความสัมพันธ์
@@ -22,7 +22,7 @@ Intro / [D] / [F#m] / [Bm] / [G] [A] / ( 2 Times ) [D]
 
                     [G]ใจดวงนี้คงไม่[F#m]แหล  [Bm]กราน [Em]ช้ำชอก[A]กว่า[D]ใคร
 
-Instru / [D] / [F#m] / [Bm] / [G] [A] / ( 2 Times ) [D]
+Instru / [D] / [F#m] / [Bm] / [G] [A] / ( Times ) [D]
 
 ( *, ** )
 

@@ -1,7 +1,7 @@
 {title: ยินดี Nologo}
 
 Intro [A]
-/ [A] / [Amaj7] / [D] / [Bm] / ( 2 Times )
+/ [A] / [Amaj7] / [D] / [Bm] / ( Times )
 
  [A]วันที่ได้ยินข่าว [Amaj7]ข่าวความรัก  [D]ของเธอ [Bm]ฉันรับฟังเรื่องราว
 
@@ -23,8 +23,8 @@ Intro / [A] / [Amaj7] / [D] / [Bm] /
 
 ( *, ** )
 
-Instru / [F#m] / [E] / [D] / [D] / ( 2 Times )
+Instru / [F#m] / [E] / [D] / [D] / ( Times )
 
 ( **, ** )
 
-Outtro / [A] / [Amaj7] / [D] / [Bm] / ( 2 Times ) [A]
+Outro / [A] / [Amaj7] / [D] / [Bm] / ( Times ) [A]

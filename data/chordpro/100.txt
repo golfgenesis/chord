@@ -1,6 +1,6 @@
 {title: เพียงพอ Potato}
 
-Intro / [B] / [E] / ( 3 Times )
+Intro / [B] / [E] / ( Times )
 
    [B]ชีวิตบางคนดิ้นรนจนเกินคำ[E]ว่าพอดี
 

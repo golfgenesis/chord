@@ -1,7 +1,7 @@
 {title: จะมีไหม Moon}
 {note: Tune down ½ tone to Eb}
 
-Intro / [E] [F#m] / [G#m] [F#m] / [E] [G#m] / [F#m] [B] / ( 2 Times )
+Intro / [E] [F#m] / [G#m] [F#m] / [E] [G#m] / [F#m] [B] / ( Times )
 
  [E]ในวันที่มัน[F#m]เดียวดาย [G#m]มองไปเห็น[F#m]ผู้คน
 
@@ -31,9 +31,9 @@ Instru [C#m]
 
  [A]เวลายังเดินอย่าง  [G#m]ช้าๆ ค่อยๆเดินไป [A]จนกว่าจะเจอ จะ[Am]ได้พบ พบใคร
 
-Instru / [E] / [A] [B] / ( 2 Times )
-/ [E] / [A] / [G#m] / [A] [B] / ( 2 Times )
+Instru / [E] / [A] [B] / ( Times )
+/ [E] / [A] / [G#m] / [A] [B] / ( Times )
 
 ( ** )
 
-Outro / [E] / [A] [B] / ( 2 Times ) [E]
+Outro / [E] / [A] [B] / ( Times ) [E]

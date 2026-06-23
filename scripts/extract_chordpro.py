@@ -131,7 +131,9 @@ def _split(c):
         mb = re.match(r'([A-Ga-g])([#b]?)', b)
         if mb: bass = '/' + mb.group(1).upper() + mb.group(2)
     qm = re.match(_QUAL, rest)
-    return root, acc, (qm.group(0) if qm else ''), bass
+    qual = qm.group(0) if qm else ''
+    if qual == 'maj': qual = ''        # bare "maj" = the major triad (Amaj == A) — normalize, don't flag
+    return root, acc, qual, bass
 
 def snap(t):
     s = _split(t)
@@ -146,7 +148,7 @@ def chords_in_box(text, x0, x1):
     t = t.replace('z', '7').replace('Z', '7')   # OCR reads the chord "7" as z (F#mz→F#m7, majz→maj7)
     # recover a slash chord whose "/" the OCR read as l / I / |  (e.g. "ElG#" → "E/G#"):
     # otherwise it splits into TWO chords (E + a spurious bass-note G#).
-    t = re.sub(r'([A-Ga-g][#b]?)[lIJ|]([A-G][#b]?)\b', r'\1/\2', t)
+    t = re.sub(r'([A-Ga-g][#b]?)[lIJ|{}]([A-G][#b]?)\b', r'\1/\2', t)
     if has_thai(t) or not t.strip(): return []
     ms = list(CHORD_TOK.finditer(t))
     if not ms: return []
@@ -202,7 +204,7 @@ def _desharp(t, vocab):
     return t
 
 INSTR_KW = re.compile(r'^(intro|verse|chorus|prechorus|bridge|outro|ending|coda|solo|interlude|instru(?:mental)?|hook|tag|riff)$', re.I)
-INSTR_FIX = [(r'\bdutro\b', 'outro'), (r'\boxtro\b', 'outro'), (r'\blnstru\b', 'instru'),
+INSTR_FIX = [(r'\bdutro\b', 'outro'), (r'\boxtro\b', 'outro'), (r'\bouttro\b', 'outro'), (r'\blnstru\b', 'instru'),
              (r'\binsttu\b', 'instru'), (r'\blntro\b', 'intro'), (r'\bintrd\b', 'intro'), (r'\bintru\b', 'intro')]
 
 def fmt_instr(text, vocab=None):
@@ -232,17 +234,17 @@ def fmt_instr(text, vocab=None):
     # ("E/D/D/E/E", 2+ slashes joining bare chords) is split into separate bars below.
     parts, depth = [], 0
     for p in re.split(r'(\s|\||[()\[\]])', t):
-        ps = p.strip()
+        ps = p.strip().strip('{}')      # leading/trailing brace = OCR noise ("{Em"→Em, "E}"→E); an INTERNAL '{' stays for the slash-repair below ("D{F#"→D/F#)
         if not ps: continue
         if ps == '(': depth += 1; parts.append('('); continue
         if ps == ')': depth = max(0, depth - 1); parts.append(')'); continue
-        if ps == '/': parts.append('/'); continue
+        if ps == '/' or ps == '|': parts.append('/'); continue   # a bar line '|' is a '/'
         if depth == 0 and ps == '1':            # a lone '1' is an OCR'd bar '/' (depth-guarded: not a Times count).
             parts.append('/'); continue         # only the digit — NOT 'I'/'l' (they collide with English lyric "I")
         if is_chord(ps):                                       # plain chord, INCL. a slash chord "E/G#" — keep whole
             parts.append('[' + snap_vocab(snap(ps), vocab) + ']'); continue
         # repair OCR chord-glyph misreads, each gated so a word can't be turned into a chord:
-        rep = re.sub(r'([A-Ga-g][#b]?)[IJ|]([A-Ga-g][#b]?)', r'\1/\2', ps)   # slash '/' read as I/J/| ("FIA"→F/A, "AbJc"→Ab/C)
+        rep = re.sub(r'([A-Ga-g][#b]?)[IJ|{}]([A-Ga-g][#b]?)', r'\1/\2', ps)   # slash '/' read as I/J/|/{/} ("FIA"→F/A, "D{F#"→D/F#)
         if rep != ps and is_chord(rep):
             parts.append('[' + snap_vocab(snap(rep), vocab) + ']'); continue
         sharp = _desharp(ps, vocab)                            # '#' read as z/s/r ("Dzm"→D#m), vocab-gated
@@ -255,7 +257,7 @@ def fmt_instr(text, vocab=None):
                 xd = x.lstrip('0123456789')
                 if is_chord(x): parts.append('[' + snap_vocab(snap(x), vocab) + ']')
                 elif xd != x and is_chord(xd): parts.append('[' + snap_vocab(snap(xd), vocab) + ']')
-                else: parts.append(x)
+                elif re.search(r'[A-Za-z*#]', x): parts.append(x)   # drop letterless junk between bars (OCR'd tab fret numbers "2/8/8/6")
             continue
         psd = ps.lstrip('0123456789')          # "6G"/"1B" — a leading bar '/' OCR'd as a digit
         if psd != ps and is_chord(psd): parts.append('[' + snap_vocab(snap(psd), vocab) + ']')
@@ -268,9 +270,9 @@ def fmt_instr(text, vocab=None):
             ms = list(CHORD_TOK.finditer(reps))
             if len(ms) > 1 and sum(m.end() - m.start() for m in ms) >= 0.9 * len(reps):
                 parts += ['[' + snap_vocab(snap(m.group()), vocab) + ']' for m in ms]
-            else: parts.append(ps)
+            elif re.search(r'[A-Za-z*#]', ps): parts.append(ps)   # keep word/marker tokens; drop a pure digit/symbol run ("28886€")
         elif len(ps) == 1 and re.fullmatch(r'[^\w/()|*#,.\[\]½-]', ps): pass  # lone OCR-noise symbol (€, @, …) → drop
-        else: parts.append(ps)
+        elif re.search(r'[A-Za-z*#]', ps): parts.append(ps)   # else: a lone digit / symbol ("0", stray glyph) is OCR noise in an instr row → drop
     s = re.sub(r'\s*\)', ' )', re.sub(r'\(\s*', '( ', ' '.join(parts)))   # tidy parens
     return re.sub(r'\s+', ' ', s).strip()
 
@@ -532,10 +534,20 @@ def assemble(raw, ov=None, warn=None):
             if f and re.search(r'\[|Intro|Instru|Outro|\(', f):
                 instr.append((sum(1 for ry in row_y if ry < iy), f))
     if warn is not None:                                       # validation flags (for --check)
+        # off-vocab: the page's chord-diagram list is often a PARTIAL subset (it omits common
+        # chords), so "not in vocab" ALONE flags hundreds of perfectly-real reads (C, G, C#m…).
+        # Trust repetition — a clean chord read ≥2× at decent confidence is real. Surface an
+        # off-vocab chord only when it's ALSO weak (a one-off OR low-confidence): the true misreads.
+        ov_stats = {}
         for c in chords:
             sp = _split(c['nm'])
             if vocab and c['nm'] not in vocab and sp and not sp[3]:
-                warn.append(f"off-vocab chord '{c['nm']}'")
+                st = ov_stats.setdefault(c['nm'], [0, 0.0])
+                st[0] += 1; st[1] = max(st[1], c['conf'])
+        for nm in sorted(ov_stats):
+            n, mc = ov_stats[nm]
+            if n >= 2 and mc >= 0.5: continue                  # repeated + confident → real; page vocab just omitted it
+            warn.append(f"off-vocab chord '{nm}'" + (f' (×{n})' if n > 1 else ''))
         if rows and not chords: warn.append('lyric rows but ZERO chords')
         lc = sorted({c['nm'] for c in chords if c['conf'] < 0.5})
         if lc: warn.append('low-confidence ' + ','.join(lc))
@@ -598,8 +610,8 @@ def warn_th(w):
     songs.bin (column 3 of _flagged.tsv) and shown in-app to the owner only, so the person
     reviewing the catalogue sees *what* is wrong in their own language without reading the
     code. Unknown shapes fall back to the raw English string."""
-    m = re.match(r"off-vocab chord '(.+)'$", w)
-    if m: return f"คอร์ด {m.group(1)} อาจอ่านผิด (ไม่อยู่ในชุดคอร์ดของเพลง)"
+    m = re.match(r"off-vocab chord '(.+?)'( \(×\d+\))?$", w)   # tolerate the optional " (×N)" occurrence-count suffix
+    if m: return f"คอร์ด {m.group(1)} อาจอ่านผิด (ไม่อยู่ในชุดคอร์ดของเพลง){m.group(2) or ''}"
     m = re.match(r"low-confidence (.+)$", w)
     if m: return f"คอร์ด {m.group(1)} ความมั่นใจต่ำ อาจอ่านผิด"
     if w == 'lyric rows but ZERO chords': return "มีเนื้อเพลงแต่อ่านคอร์ดไม่ได้เลย"

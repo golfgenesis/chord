@@ -1,9 +1,9 @@
 {title: begins Big Ass}
 {note: Tune down ½ tone to Eb}
 
-Intro / [Dm] / ( 8 Times )
-[Dm] [Dm] / [Bb] / [C] / ( 2 Times )
-[Dm] / ( 4 Times )
+Intro / [Dm] / ( Times )
+[Dm] [Dm] / [Bb] / [C] / ( Times )
+[Dm] / ( Times )
 
   [Dm]ดวงคนก็เหมือนดวงดาว ใครว่ามัน[Bb]ยืนยาว ต้องมี[C]สักวันร่วงหล่นลงมา
   [Dm]คนบางคน กลายไปเป็นดาวมัวเมา[Bb]ลืมตัว อยู่ๆ ไม่[C]ทันไรก็ร่วงลงมา
@@ -22,8 +22,8 @@ Instru [Dm] / [C#dim] /
 
 ( *, ** )
 
-Instru [Dm] / [C#dim] / ( 6 Times ) [Dm]
-/ [Dm] / [Bb] / [Am] / [Bb] [C] / ( 2 Times )
+Instru [Dm] / [C#dim] / ( Times ) [Dm]
+/ [Dm] / [Bb] / [Am] / [Bb] [C] / ( Times )
 
   [Dm]เมื่อ   [Eb]ท้องฟ้า[Bb]ที่[Dm]เคย[Bb]สว่าง [Am]ก็[Am]ยังมี[Bb]วัน[C]มืด[Bb]ลง
 
@@ -33,9 +33,9 @@ Instru [Dm] / [C#dim] / ( 6 Times ) [Dm]
 
   [Dm]จะใหญ่คับ[Bb]ฟ้ามันก็[Am]เท่านั้น [Bb]ชีวิต[C]มันยังอีกไกล
 
-Instru / [Dm] / [Bb] / [Am] / [Bb] [C] / ( 2 Times )
-/ [Dm] / [Dm] / [Bb] / [C] / ( 2 Times )
+Instru / [Dm] / [Bb] / [Am] / [Bb] [C] / ( Times )
+/ [Dm] / [Dm] / [Bb] / [C] / ( Times )
 
 ( *, ** )
 
-Outro / [Dm] / [Dm] / [Dm] / [C#dim] / ( 4 Times ) [Dm]
+Outro / [Dm] / [Dm] / [Dm] / [C#dim] / ( Times ) [Dm]
