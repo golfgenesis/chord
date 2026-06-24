@@ -105,6 +105,7 @@ STRICT RULES — output ONLY the ChordPro text. No code fences, no commentary, n
    The ONLY lines allowed to carry chords without lyrics are the purely instrumental rows in rule 3.
 2. Preserve the lyrics EXACTLY as printed — same words, spelling and line breaks. Do NOT translate, summarise, correct or add lyrics.
 3. Purely instrumental / chord-only rows (Intro, Solo, Outro, Instru, turnarounds with no words): keep the section label, then bracket EVERY chord, e.g.  Intro: [C] / [G] / [Am] / [F]   (x2)
+   On instrumental or intro rows where multiple chords are listed together, you MUST wrap EVERY single chord token inside its own square brackets, including slash chords (e.g. convert [F]C/E [Dm]C into [F][C/E] [Dm][C]). No chord token should ever be left naked without brackets.
 4. METADATA — read the TOP of the sheet (near the title / artist) for a key, capo, or tuning note and, only if it is actually visible (never guess), emit it as the FIRST line(s):
    - a stated key  → {key: C}     (use a minor tonic like {key: Am} when the sheet says so)
    - a capo        → {note: Capo 2}
