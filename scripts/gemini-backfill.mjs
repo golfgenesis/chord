@@ -6,7 +6,7 @@
 //
 //   • RESUMABLE — a song whose data/songs-md/<id>.md already exists is skipped,
 //     so you can Ctrl+C any time and re-run to pick up where you left off.
-//   • FREE-TIER SAFE — a strict delay (default 4000 ms) sits between every image
+//   • FREE-TIER SAFE — a strict delay (default 4500 ms) sits between every image
 //     so we stay under the Gemini API free-tier rate limit (~15 req/min).
 //   • IMAGE SOURCE — local images/<name>.webp if present (free, fast), else the
 //     R2 Custom Domain (VITE_IMAGE_BASE). Filename rules mirror build-data.mjs.
@@ -68,14 +68,14 @@ const START = arg("--start") != null ? Number(arg("--start")) : 0;
 const ONLY_IDS = arg("--ids")
   ? new Set(arg("--ids").split(",").map((s) => Number(s.trim())).filter(Number.isFinite))
   : null;
-const DELAY_MS = Number(arg("--delay", "4000")); // strict per-image delay (free tier)
+const DELAY_MS = Number(arg("--delay", "4500")); // strict per-image delay (free tier)
 const MODEL = arg("--model", "gemini-2.5-flash");
 const IMAGE_BASE = process.env.VITE_IMAGE_BASE || ""; // R2 fallback when no local file
 // Circuit breaker: stop the run cleanly after this many BACK-TO-BACK rate /
 // quota / 503 errors (i.e. we've hit the daily-quota or overload wall). The
 // run exits 0 and is resumable — a 24/7 wrapper just sleeps and retries later,
 // instead of churning the whole queue against a wall. 0 disables it.
-const MAX_RATE_ERRORS = Number(arg("--max-rate-errors", "6"));
+const MAX_RATE_ERRORS = Number(arg("--max-rate-errors", "20"));
 // Transient errors worth backing off on AND counting toward the breaker.
 const RATE_RE = /\b429\b|\b503\b|quota|rate|RESOURCE_EXHAUSTED|UNAVAILABLE|overload|high demand/i;
 

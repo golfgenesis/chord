@@ -17,6 +17,8 @@
     "ai:backfill": "node scripts/gemini-backfill.mjs",
     "ai:upload": "py -3.11 scripts/upload_md_r2.py",
     "ai:ship": "node scripts/gemini-backfill.mjs && node scripts/build-data.mjs && py -3.11 scripts/upload_md_r2.py",
+    "ai:fix": "node scripts/fix.mjs",
+    "ai:redo": "node scripts/gemini-backfill.mjs --force && node scripts/build-data.mjs && py -3.11 scripts/upload_md_r2.py --force",
     "seo:all": "node scripts/build-sitemap.mjs && node scripts/indexnow.mjs && node scripts/social-post.mjs"
   },
   "dependencies": {
