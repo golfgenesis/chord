@@ -18,7 +18,12 @@
 // any "indexable set" logic stay cheap without shipping the text to every
 // client. This is what keeps songs.bin tiny for the 10 ms in-memory search.
 //
-// Wire format (public/songs.bin):  XOR(gzip(JSON), KEY)
+// Wire format (public/songs.bin):  XOR(brotli(JSON), KEY)
+// Brotli (quality 11) is ~37% smaller than gzip on this dataset. The browser
+// can't decode brotli via DecompressionStream (that API only does gzip/deflate),
+// so the client decodes with the `brotli` npm package — see src/lib/songsCodec.ts;
+// the SSR Pages Function (functions/song) decodes the same way. zlib's brotli
+// output is standard RFC 7932, so the JS-package decoder reads it byte-for-byte.
 // The same KEY is hard-coded in src/lib/songsCodec.ts — if you change one,
 // change both, or existing clients won't be able to decode the new bundle.
 //
@@ -90,15 +95,20 @@ console.log(
 );
 
 const json = Buffer.from(JSON.stringify(slim), "utf8");
-const gz = zlib.gzipSync(json, { level: 9 });
+const compressed = zlib.brotliCompressSync(json, {
+  params: {
+    [zlib.constants.BROTLI_PARAM_QUALITY]: 11, // max ratio (build-time, one-off)
+    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: json.length,
+  },
+});
 const klen = KEY.length;
-for (let i = 0; i < gz.length; i++) gz[i] ^= KEY[i % klen];
+for (let i = 0; i < compressed.length; i++) compressed[i] ^= KEY[i % klen];
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
-fs.writeFileSync(OUT, gz);
+fs.writeFileSync(OUT, compressed);
 // Remove the legacy plaintext file if it still exists from an older build.
 if (fs.existsSync(STALE_JSON)) fs.unlinkSync(STALE_JSON);
 
 console.log(`Wrote ${slim.length.toLocaleString()} songs to ${OUT}`);
 console.log(`  json:    ${(json.length / 1024 / 1024).toFixed(2)} MB`);
-console.log(`  gzip:    ${(gz.length / 1024 / 1024).toFixed(2)} MB (obfuscated)`);
+console.log(`  brotli:  ${(compressed.length / 1024 / 1024).toFixed(2)} MB (obfuscated)`);

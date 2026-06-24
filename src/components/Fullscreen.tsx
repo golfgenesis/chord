@@ -91,6 +91,12 @@ export function Fullscreen() {
     () => (parsedSheet ? detectKey(parsedSheet.chords) : null),
     [parsedSheet],
   );
+  // Distinct chord symbols the sheet uses (the parsed `[...]` brackets, deduped)
+  // — drives the "วิเคราะห์เจอ X คอร์ด" readout in the transpose popover.
+  const uniqueChordCount = useMemo(
+    () => (parsedSheet ? new Set(parsedSheet.chords).size : 0),
+    [parsedSheet],
+  );
   // Source key: the {key:} directive wins, else chord detection above the
   // confidence floor, else C. Deterministic from the sheet, so re-deriving on
   // every open is stable — no caching effect needed.
@@ -329,7 +335,7 @@ export function Fullscreen() {
               fromKey={fromKey}
               toKey={toKey}
               detectedConfidence={textDetectedKey?.confidence ?? null}
-              chordCount={parsedSheet!.chords.length}
+              chordCount={uniqueChordCount}
               transposeActive={transposeActive}
               onChangeTo={setTo}
               onReset={resetTranspose}
@@ -557,6 +563,8 @@ function DetectionChip({
 
   const conf = detectedConfidence ?? 0;
   const tier = confidenceTier(conf);
+  const confPct = Math.round(conf * 100);
+  const confLabel = tier === "high" ? "มั่นใจสูง" : tier === "mid" ? "ปานกลาง" : "ต่ำ";
   const dotClass =
     tier === "high"
       ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]"
@@ -609,11 +617,19 @@ function DetectionChip({
               className="fixed z-[61] flex flex-col gap-2.5 rounded-2xl border border-white/10 bg-bg-soft/95 p-3 shadow-2xl backdrop-blur-xl animate-slide-up"
               style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH }}
             >
-              <div className="flex items-baseline justify-between gap-2 text-[11px]">
-                <span className="text-ink-dim">
-                  เปลี่ยนคีย์ตามทฤษฎีดนตรี ·{" "}
-                  <span className="font-semibold text-ink">{chordCount}</span> คอร์ด
-                </span>
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-baseline justify-between gap-2 text-[11px]">
+                  <span className="text-ink-dim">
+                    วิเคราะห์เจอ <span className="font-semibold text-ink">{chordCount}</span> คอร์ด
+                  </span>
+                  <span className="flex items-center gap-1.5 font-medium text-ink-dim">
+                    <span className={`inline-block size-1.5 rounded-full ${dotClass}`} aria-hidden="true" />
+                    <span>
+                      {confLabel} · {confPct}%
+                    </span>
+                  </span>
+                </div>
+                <span className="text-[10.5px] text-ink-dim/70">เปลี่ยนคีย์ตามทฤษฎีดนตรี</span>
               </div>
 
               <div className="flex items-baseline justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">

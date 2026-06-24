@@ -22,6 +22,8 @@
 // The rendered HTML is edge-cached (caches.default) so Googlebot hammering 70k
 // pages mostly hits cache, and the payload decode happens only on a cold isolate.
 
+import brotliDecompress from "brotli/decompress";
+
 const XOR_KEY_HEX = "9c4f1d6a3e80b5b27cdb1f24a8e6b35a2710f87c4d65e3b9af8c01d72e64b395";
 const SITE_NAME = "Chord";
 
@@ -40,8 +42,11 @@ async function loadSongs(env, origin) {
   const res = await env.ASSETS.fetch(new Request(`${origin}/songs.bin`));
   const bytes = new Uint8Array(await res.arrayBuffer());
   for (let i = 0; i < bytes.length; i++) bytes[i] ^= KEY[i % KEY.length];
-  const ds = new DecompressionStream("gzip");
-  const text = await new Response(new Response(bytes).body.pipeThrough(ds)).text();
+  // songs.bin is XOR(brotli(JSON)). The Workers runtime's DecompressionStream
+  // only does gzip/deflate, so decode with the same `brotli` package the client
+  // uses (kept in sync with src/lib/songsCodec.ts / scripts/build-data.mjs).
+  const out = brotliDecompress(bytes);
+  const text = new TextDecoder().decode(out);
   const arr = JSON.parse(text);
   const map = new Map();
   for (const s of arr) map.set(s.id, s);

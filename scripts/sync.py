@@ -1,6 +1,7 @@
 r"""
 One-stop pipeline: probe source → scrape new pages → download → convert
-→ upload → verify → rebuild songs.bin → (optional) git commit + push.
+→ extract ChordPro (Gemini) → upload images + ChordPro → verify
+→ rebuild songs.bin → (optional) git commit + push.
 
 Each step shells out to the existing per-step script, so they remain
 independently runnable + testable. Every step is also resumable: skips
@@ -22,6 +23,9 @@ USAGE
   py F:\chord\scripts\sync.py --skip-upload --skip-push
       Local-only run, no R2 / no git.
 
+  py F:\chord\scripts\sync.py --skip-chordpro
+      Images only — don't extract/upload the ChordPro text for new songs.
+
   py F:\chord\scripts\sync.py --push
       Also git-commit + push the rebuilt songs.bin at the very end.
 
@@ -34,6 +38,8 @@ PREREQUISITES (one-time)
   - py -m pip install requests beautifulsoup4 lxml boto3 tqdm
   - cwebp on PATH or `CWEBP` env var pointing at the binary
   - R2_ACCESS_KEY / R2_SECRET_KEY in <project_root>/.env.local
+  - node on PATH + GEMINI_API_KEY in .env.local (for the ChordPro step;
+    skip with --skip-chordpro if you only want the images)
 """
 
 from __future__ import annotations
@@ -210,6 +216,11 @@ def main() -> None:
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-sync-names", action="store_true")
     parser.add_argument("--skip-convert", action="store_true")
+    parser.add_argument(
+        "--skip-chordpro",
+        action="store_true",
+        help="Don't run the Gemini ChordPro extraction / .md upload for new songs.",
+    )
     parser.add_argument("--skip-upload", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
@@ -283,10 +294,27 @@ def main() -> None:
         steps.append(Step("Convert PNG → WebP (deletes source)", [
             py, SCRIPTS / "convert_to_webp.py",
         ]))
+    # Extract ChordPro text for the NEW songs right after their images exist.
+    # Scoped to the new range (--start) so a sync run never tries to backfill
+    # the whole catalogue; resumable (skips songs that already have a .md).
+    # OPTIONAL: a missing GEMINI_API_KEY / rate-limit must NOT abort the proven
+    # image pipeline — the new songs still work via the image fallback, and the
+    # text can be filled in later with `npm run chordpro:backfill`.
+    if not args.skip_chordpro and start <= end:
+        steps.append(Step("Extract ChordPro (Gemini) for new songs", [
+            "node", SCRIPTS / "gemini-backfill.mjs", "--start", start,
+        ], optional=True))
     if not args.skip_upload:
         steps.append(Step("Upload WebP → R2", [
             py, SCRIPTS / "upload_r2.py", IMAGES_DIR,
         ]))
+        # Push the freshly-extracted .md sheets alongside the images. Optional
+        # for the same reason as the extraction step (text is the image's
+        # secondary layer); resumable (only new/changed files upload).
+        if not args.skip_chordpro:
+            steps.append(Step("Upload ChordPro .md → R2", [
+                py, SCRIPTS / "upload_md_r2.py",
+            ], optional=True))
     if not args.skip_verify:
         steps.append(Step("Verify sync (results.json ↔ images ↔ R2)", [
             py, SCRIPTS / "check_sync.py",
