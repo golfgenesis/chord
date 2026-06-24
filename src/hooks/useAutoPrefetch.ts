@@ -1,13 +1,16 @@
 import { useEffect } from "react";
 import { useApp } from "../store";
 import { prefetchSongs } from "../lib/offlineDownload";
+import { prefetchChordTexts } from "../lib/chordText";
 import type { Song } from "../types";
 
 /**
- * Background-cache the images for songs the user actually cares about —
+ * Background-cache the chord sheets for songs the user actually cares about —
  * favorites, recents, and every playlist in the current room (mine +
- * bandmates'). Runs on a low-concurrency pool that skips already-cached
- * songs, so re-firing on every collection change is cheap.
+ * bandmates'). Warms BOTH caches: the ChordPro text (.md, the primary view)
+ * and the WebP image (the offline fallback). Runs on low-concurrency pools
+ * that skip already-cached entries, so re-firing on every collection change
+ * is cheap.
  *
  * This replaces the old "ดาวน์โหลด 70k ทั้งหมด" sweep. The total set is
  * usually <500 songs even for heavy users, and the prefetch silently
@@ -35,6 +38,9 @@ export function useAutoPrefetch(): void {
       const s = byId.get(id);
       if (s) songs.push(s);
     }
-    if (songs.length > 0) prefetchSongs(songs);
+    if (songs.length > 0) {
+      prefetchChordTexts(songs); // primary view (.md text)
+      prefetchSongs(songs); // offline image fallback
+    }
   }, [loaded, byId, favorites, latest, playlists, othersPlaylists]);
 }

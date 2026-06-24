@@ -7,7 +7,7 @@
 
 import { precacheAndRoute, createHandlerBoundToURL, cleanupOutdatedCaches } from "workbox-precaching";
 import { registerRoute, NavigationRoute } from "workbox-routing";
-import { CacheFirst } from "workbox-strategies";
+import { CacheFirst, StaleWhileRevalidate } from "workbox-strategies";
 import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
 
@@ -51,9 +51,50 @@ registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html")));
 // data to every client. The old stale-while-revalidate route is gone — it
 // served the previous payload for one extra load after each deploy.
 
-// 4) Images — cache-first from R2 (or same-origin proxy in prod) -------------
 const IMAGE_BASE = import.meta.env.VITE_IMAGE_BASE as string | undefined;
+const TEXT_BASE = import.meta.env.VITE_TEXT_BASE as string | undefined;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// 4) ChordPro text (.md) — stale-while-revalidate from R2 --------------------
+// Registered BEFORE the image route on purpose: the markdown lives on the SAME
+// R2 origin as the images, and the image route below matches anything on that
+// origin. Workbox uses the FIRST matching route, so `.md` must be claimed here
+// first. SWR = serve the cached copy instantly (zero-latency offline) while a
+// background fetch refreshes it, so a re-extracted sheet silently updates.
+let textPattern: RegExp;
+try {
+  // The client builds text URLs as `${VITE_TEXT_BASE ?? VITE_IMAGE_BASE/md}/<id>.md`
+  // (see src/lib/chordText.ts). Derive the same origin here, falling back to a
+  // same-origin `/md/` path for local dev (served by the vite md middleware).
+  const tb =
+    TEXT_BASE || (IMAGE_BASE ? `${IMAGE_BASE.replace(/\/+$/, "")}/md` : "");
+  const origin = tb ? new URL(tb).origin : null;
+  textPattern = origin
+    ? new RegExp(`^${escapeRe(origin)}/.*\\.md(?:\\?|$)`)
+    : /\/md\/[^/]*\.md(?:\?|$)/;
+} catch {
+  textPattern = /\/md\/[^/]*\.md(?:\?|$)/;
+}
+
+registerRoute(
+  textPattern,
+  new StaleWhileRevalidate({
+    cacheName: "chord-text",
+    // R2 sends `Vary: Origin`; normalize the key (mirrors the image route) so
+    // the SW-side fetch and any JS-side cache.put hit the SAME entry.
+    matchOptions: { ignoreVary: true },
+    plugins: [
+      { cacheKeyWillBeUsed: async ({ request }) => new Request(request.url) },
+      new ExpirationPlugin({
+        maxEntries: 5000,
+        maxAgeSeconds: 60 * 60 * 24 * 365,
+      }),
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+    ],
+  }),
+);
+
+// 5) Images — cache-first from R2 (or same-origin proxy in prod) -------------
 let imagePattern: RegExp;
 try {
   const origin = IMAGE_BASE ? new URL(IMAGE_BASE).origin : null;
@@ -99,12 +140,12 @@ registerRoute(
   }),
 );
 
-// 5) Allow the app to trigger updates ----------------------------------------
+// 6) Allow the app to trigger updates ----------------------------------------
 self.addEventListener("message", (e) => {
   if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-// 6) Notification click — bring the right tab forward, or open a fresh one --
+// 7) Notification click — bring the right tab forward, or open a fresh one --
 // When a bandmate picks a song the page (or SW) fires a notification with a
 // `data.url` pointing at the current room. Clicking the OS notification
 // should land the user on that exact room URL: focus an existing client if

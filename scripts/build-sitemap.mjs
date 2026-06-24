@@ -1,7 +1,8 @@
 // Build the SEO sitemap from the songs payload.
 //
-// Only songs that have inline ChordPro TEXT (`cp`) are listed — those are the
-// pages with real, crawlable content. Image-only songs are skipped (thin pages
+// Only songs that have a ChordPro sheet (the `t` marker; text lives on R2) are
+// listed — those are the pages with real, crawlable content. Image-only songs
+// are skipped (thin pages
 // → would hurt SEO; the edge function marks any it serves as `noindex`). As the
 // backfill (`npm run chordpro:backfill`) converts more songs, re-run this and
 // the indexable set grows automatically.
@@ -82,7 +83,7 @@ function main() {
     process.exit(0);
   }
   const songs = decodeSongs(fs.readFileSync(BIN));
-  const withText = songs.filter((s) => s.cp);
+  const withText = songs.filter((s) => s.t);
   console.log(`build-sitemap: ${songs.length} songs, ${withText.length} with ChordPro text (indexable).`);
 
   fs.mkdirSync(SITEMAP_DIR, { recursive: true });

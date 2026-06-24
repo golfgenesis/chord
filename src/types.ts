@@ -1,13 +1,11 @@
 export interface Song {
   id: number;
   name: string;
-  /** Inline ChordPro text (chords-as-text). Present only for songs the offline
-   *  pipeline has converted; when set, the app renders text instead of the image. */
-  cp?: string;
-  /** Thai-language QA note for a song `chordpro:check` flagged as suspect (e.g.
-   *  "คอร์ด C อาจอ่านผิด"). Shipped for flagged songs only; rendered ONLY for
-   *  owners (OWNER_EMAILS) as an in-app tag — a soft QA aid, not secret data. */
-  flag?: string;
+  /** `1` when the song has a ChordPro sheet on R2 (data/songs-md/<id>.md). The
+   *  text itself is NOT bundled — it's fetched per song at view time (see
+   *  src/lib/chordText.ts) so songs.bin stays tiny. This marker just lets the
+   *  SEO Pages Function (functions/song) know which pages are indexable. */
+  t?: 1;
 }
 
 export interface RoomState {

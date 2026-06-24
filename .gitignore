@@ -1,7 +1,12 @@
-# Bulk data — images stay local, the rest of the dataset is versioned.
+# Bulk data — images + ChordPro text stay local (and on R2), the rest of the
+# dataset is versioned. The .md sheets are distributed via R2 (see
+# scripts/upload_md_r2.py) and their presence is baked into the committed
+# songs.bin as a `t` flag by build-data.mjs — so the repo never carries 70k
+# text files (keeps us under the Cloudflare Pages file-count limit too).
 /images
 /images-webp
 /logs
+/data/songs-md
 /scripts/.chordpro_cache
 
 # Local-only

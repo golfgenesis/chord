@@ -71,8 +71,7 @@ export interface ParsedSheet {
   sourceKey: Semitone | null;
 }
 
-// Section labels we recognise on chord-only rows. Mirrors the set in
-// chordOCR.ts so the two pipelines classify the same rows the same way.
+// Section labels we recognise on chord-only rows (Intro / Instru / etc).
 const SECTION_LABEL_RE =
   /\b(intro|verse|chorus|prechorus|bridge|outro|ending|coda|solo|interlude|instru(?:mental)?|hook|tag|riff)\b/gi;
 

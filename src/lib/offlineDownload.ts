@@ -13,6 +13,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Song } from "../types";
 import { imageUrl } from "./imageUrl";
+import { absoluteChordTextUrl, getCachedTextUrlSet } from "./chordText";
 
 const CACHE_NAME = "chord-images";
 
@@ -277,9 +278,10 @@ export function notifyCacheChanged(): void {
 // ─── Hook: cached-song-id Set for SongList ───────────────────────────────
 
 /**
- * Returns a Set of `song.id`s whose image is currently in the offline
- * cache. Refreshes whenever notifyCacheChanged() fires (Fullscreen
- * caches a song, prefetch completes a batch, etc.).
+ * Returns a Set of `song.id`s that are available offline — i.e. whose
+ * ChordPro text (.md, the primary view) OR WebP image (the fallback) is in
+ * the local cache. Refreshes whenever notifyCacheChanged() fires (Fullscreen
+ * caches a song, a prefetch batch completes, etc.).
  */
 export function useCachedSongIds(songs: Song[]): Set<number> {
   const [cached, setCached] = useState<Set<number>>(() => new Set());
@@ -289,11 +291,15 @@ export function useCachedSongIds(songs: Song[]): Set<number> {
     let cancelled = false;
     async function refresh() {
       if (songs.length === 0) return;
-      const urlSet = await getCachedUrlSet();
+      const [imgSet, textSet] = await Promise.all([
+        getCachedUrlSet(),
+        getCachedTextUrlSet(),
+      ]);
       if (cancelled) return;
       const ids = new Set<number>();
       for (const s of songs) {
-        if (urlSet.has(absoluteImageUrl(s))) ids.add(s.id);
+        if (textSet.has(absoluteChordTextUrl(s)) || imgSet.has(absoluteImageUrl(s)))
+          ids.add(s.id);
       }
       if (!cancelled) setCached(ids);
     }

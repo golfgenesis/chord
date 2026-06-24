@@ -19,11 +19,10 @@ npm run sync:dry     # print every step's command without running (skips probe)
 npm run check        # cross-check results.json ↔ images/ ↔ R2 bucket (pretty console)
 npm run check:clean  # delete orphan WebP files locally + on R2 (asks confirmation)
 
-# ChordPro text pipeline (chord-sheet images → inline ChordPro text) — see below
-npm run chordpro:backfill   # ⭐ OCR ALL un-extracted songs in parallel (resumable; Ctrl+C to stop)
-npm run chordpro:check      # regen all from cache + flag suspect songs → data/chordpro/_flagged.tsv
-npm run chordpro:fix -- 19  # regen song(s) 19 (+ its override) and rebuild songs.bin
-npm run chordpro:build      # regen ALL from cache + rebuild songs.bin (after a rule-fix)
+# ChordPro text pipeline (chord-sheet images → inline ChordPro markdown via Gemini) — see below
+npm run chordpro:backfill   # ⭐ Gemini 2.5 Flash → data/songs-md/<id>.md (resumable, 4s/img, skips cached)
+npm run chordpro:upload     # push data/songs-md/*.md → R2 under md/<id>.md (resumable)
+npm run chordpro:ship       # backfill → build-data (bake `t` flags) → upload, in one go
 ```
 
 No test suite exists; verification is type-check + lint + manual browser testing.
@@ -146,31 +145,23 @@ Don't try to proxy `/__/auth/*` through Cloudflare Pages Functions to keep every
 - **`scripts/check_sync.py`** — standalone verifier: cross-checks `data/results.json` vs local `images/` vs R2 bucket. Pretty box-drawing console output; `--json` for machines. Reports missing-locally / missing-on-R2 / orphans, and can delete orphans with `--delete-orphans`. Exit 0 if everything matches, 1 otherwise (useful in pre-push hooks). Run via `npm run check`.
 - `scripts/pipeline.ps1` — older PowerShell wrapper. Only runs upload + build + push (no scrape/download/convert) and uses `py` autodetect. **`sync.py` supersedes it for the full pipeline**; `pipeline.ps1` is kept for back-compat with anyone who has scripts wired into it.
 - **Do NOT add `publish.ps1` or `check_missing.py` back** — both were removed because they built/checked the legacy `songs.json` (no longer exists), and the `file` field they referenced was never written by the current `build-data.mjs`.
+- `scripts/gemini-backfill.mjs` — Node. The ChordPro backfill (see below). `scripts/upload_md_r2.py` — pushes `data/songs-md/*.md` → R2 `md/<id>.md`.
 - Sequencing when adding new songs (manually, if not using `sync.py`): `scrape.py` → `download.py` (PNG) → `sync_names.py` (still PNG-stage) → `convert_to_webp.py` (PNG→WebP, deletes source) → `upload_r2.py images/` → `check_sync.py` → `node scripts/build-data.mjs`. Running `sync_names.py` after conversion will report 70k "missing" files because it only knows about `.png`.
 
-## ChordPro text pipeline (chord-sheet images → inline ChordPro text)
+## ChordPro text pipeline (chord-sheet images → inline ChordPro markdown, via Gemini)
 
-Migrating the app off chord-sheet **images** onto **ChordPro text** so the client renders text +
-transposes (no images). Full handoff: **[scripts/CHORDPRO_PIPELINE.md](scripts/CHORDPRO_PIPELINE.md)** — read it before changing extraction. Code: [scripts/extract_chordpro.py](scripts/extract_chordpro.py); renderer [src/components/ChordSheet.tsx](src/components/ChordSheet.tsx) + parser [src/lib/chordpro.ts](src/lib/chordpro.ts); `build-data.mjs` bundles each `data/chordpro/<id>.txt` as a `cp` field on the song in `songs.bin`, and `Fullscreen` shows text whenever a song has one (falls back to the image otherwise — so going public before the backfill finishes is fine).
+The app's primary view is **ChordPro text** (client renders text + transposes); the chord-sheet
+**image is a fallback** when a song has no text yet or the device is offline + the text isn't cached.
 
-**Two-stage, re-runnable design** (so a late-found bug never means re-OCRing 70k):
-- `ocr_raw(id)` — **EXPENSIVE** (~45-55s/song CPU): fetch page+image, run EasyOCR → a JSON raw intermediate cached to `data/chordpro-raw/<id>.json`. The only step that needs OCR.
-- `assemble(raw, overrides)` — **CHEAP** (ms): all the *rules* (chord grammar, vocab repair, `align_lyrics`, `fmt_instr`, placement). Re-runnable over every cached raw via `--regen`.
+**Hybrid Markdown + image-fallback architecture** (this is the load-bearing design):
+- **Extraction** ([scripts/gemini-backfill.mjs](scripts/gemini-backfill.mjs), `npm run chordpro:backfill`) — sends each WebP chord-sheet image (local `images/<name>.webp` first, else R2) to **Gemini 2.5 Flash** via `@google/genai` and writes the returned Inline ChordPro to `data/songs-md/<id>.md`. A strict 4 s delay per image keeps it under the free-tier rate limit. **Resumable** — a song whose `.md` already exists is skipped (re-run any time; `--force` to redo, `--limit`/`--start`/`--ids` to scope). `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) from `.env.local`. `data/songs-md/` is **gitignored** (like `images/`).
+- **Distribution** — the `.md` files ship to **R2** (`scripts/upload_md_r2.py`, `npm run chordpro:upload`) under `md/<id>.md`, alongside the WebP images. They are **NOT** bundled into `songs.bin` — that stays tiny (≈1.4 MB, `{id,name}`) for the 10 ms in-memory search. `build-data.mjs` only scans `data/songs-md/` and bakes a 1-byte **`t: 1`** marker onto songs that have a sheet (so the SEO function + sitemap know which pages are indexable, without shipping the text everywhere).
+- **Service worker** ([src/sw.ts](src/sw.ts)) — a **StaleWhileRevalidate** route for `.md` (cache `chord-text`), registered **before** the image route because both share the R2 origin and workbox uses the first match. Online → serve cached instantly + refresh in the background; offline → serve cached with zero latency.
+- **Client** — [src/lib/chordText.ts](src/lib/chordText.ts) builds `${VITE_TEXT_BASE ?? VITE_IMAGE_BASE/md}/<id>.md` and fetches it. [Fullscreen](src/components/Fullscreen.tsx): fetch the `.md` → parse ([src/lib/chordpro.ts](src/lib/chordpro.ts)) → render ([ChordSheet](src/components/ChordSheet.tsx)) with transpose; on 404 / offline-uncached the fetch returns null → **fall back to the WebP image** (its own cache-first / blob fast-path / error-overlay flow). [useAutoPrefetch](src/hooks/useAutoPrefetch.ts) warms BOTH caches (text + image) for favorites / playlists / recents.
 
-So: a **rule bug → fix code + regen** (minutes, no OCR); a **one-off misread → a per-song override + regen** (instant); only a **detection change** needs re-OCR (`--force <id>`, from the cached image).
+**Fix workflow** — a bad sheet is now a one-song re-run: `node scripts/gemini-backfill.mjs --ids <id> --force` (or tweak the prompt in `gemini-backfill.mjs` for a systemic improvement), then `npm run chordpro:upload` + `node scripts/build-data.mjs`. There is no OCR-rule layer, no per-song override JSON, no `chordpro:check` flagging — all of that (and the local EasyOCR/tesseract path, the `cp`/`flag` payload fields, the owner image-toggle, `ChordOverlay`, `sampleChordpro`) was removed in the Gemini migration.
 
-**Key facts**
-- Lyrics come from the page **HTML** (perfect Thai, zero OCR); OCR only reads chord **names + x-positions**. `align_lyrics` fuzzy-matches HTML lines ↔ image OCR rows so chords land on the right line when the two disagree on which lines exist (was the main "ตำแหน่งไม่ตรง" cause).
-- GPU is a **dead end on this box** (AMD RX 6600 XT, no CUDA; EasyOCR's LSTM won't run on DirectML). CPU only — hence the parallel backfill.
-- `data/chordpro-overrides/<id>.json` (committed) = per-song manual fixes (`rename`/`replace`/`title`/`note`), applied during regen, survive every rule change. See its README.
-- Determinism: `snap_vocab` sorts vocab; `main()` forces utf-8 stdout (Windows cp1252 consoles crashed on Thai/`⚠` prints).
-
-**Fix workflow (find → fix → ship)**
-1. `npm run chordpro:check` → `data/chordpro/_flagged.tsv` lists suspect songs + a categorized reason (`instr leftover`, `N HTML line(s) not drawn in image`, `off-vocab`, `low-confidence`, …). Compare the text against the cached original at `scripts/.chordpro_cache/<id>.png`.
-2. **Pattern bug** (affects many) → fix the rule in `extract_chordpro.py` → `npm run chordpro:build` (regen ALL + rebuild). **One-off** → edit `data/chordpro-overrides/<id>.json` → `npm run chordpro:fix -- <id>` (regen that song + rebuild).
-3. `npm run dev`, then **Ctrl+Shift+R** (the service worker caches the old `songs.bin`).
-
-**Fix at the root cause, not per-song** — the same OCR failure repeats as a pattern across many of the 70k; fix the rule/detection so the whole pattern improves, and reach for an override only for the truly song-specific residue. `chordpro:check` only *flags*; it never fixes.
+> **Migration note (feature/gemini-chordpro):** the legacy local-OCR pipeline (EasyOCR/tesseract, `extract_chordpro.py`, `backfill.py`, `vlm_chordpro.py`, `regen.mjs`, `data/chordpro*`, `chordVocab.ts`, `chordOCR.ts`) is gone. The GPU/DirectML dead-end no longer applies — extraction is a cloud API call now.
 
 ## Sync API contract
 
