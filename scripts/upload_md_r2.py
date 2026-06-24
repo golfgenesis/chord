@@ -15,8 +15,9 @@ uploads new / changed files (size mismatch). Concurrent (16 threads).
 R2 credentials come from <project_root>/.env.local (R2_ACCESS_KEY / R2_SECRET_KEY).
 
     pip install boto3
-    py -3.11 scripts/upload_md_r2.py
-    py -3.11 scripts/upload_md_r2.py --force   # re-upload everything
+    py -3.11 scripts/upload_md_r2.py             # new / changed files only
+    py -3.11 scripts/upload_md_r2.py --force     # re-upload (overwrite) everything
+    py -3.11 scripts/upload_md_r2.py --ids 2,4   # overwrite only these <id>.md (for per-song fixes)
 """
 
 import sys
@@ -38,6 +39,20 @@ CACHE_CONTROL = "public, max-age=3600"
 CONTENT_TYPE = "text/markdown; charset=utf-8"
 FORCE = "--force" in sys.argv
 
+
+def _parse_ids() -> "set[str] | None":
+    if "--ids" not in sys.argv:
+        return None
+    i = sys.argv.index("--ids")
+    if i + 1 >= len(sys.argv):
+        sys.exit("ERROR: --ids needs a comma-separated list, e.g. --ids 2,4,19")
+    return {s.strip() for s in sys.argv[i + 1].split(",") if s.strip()}
+
+
+# When set, upload ONLY these <id>.md and ALWAYS overwrite them (the size check
+# below would silently skip a same-size edit — for a targeted fix we never want that).
+ONLY_IDS = _parse_ids()
+
 if not LOCAL_DIR.is_dir():
     sys.exit(f"ERROR: {LOCAL_DIR} not found — run the backfill first.")
 
@@ -55,12 +70,17 @@ print(f"  found {len(existing):,} files ({time.time() - t0:.1f}s)")
 
 # ---- local md files --------------------------------------------------------
 local_files = sorted(p for p in LOCAL_DIR.iterdir() if p.is_file() and p.suffix == ".md")
+if ONLY_IDS is not None:
+    local_files = [p for p in local_files if p.stem in ONLY_IDS]
+    missing = ONLY_IDS - {p.stem for p in local_files}
+    if missing:
+        print(f"  ! no local .md for id(s): {', '.join(sorted(missing))} — run the backfill for them first")
 print(f"Local: {len(local_files):,} .md files in {LOCAL_DIR}")
 
 
 def needs_upload(p: Path) -> bool:
-    if FORCE:
-        return True
+    if FORCE or ONLY_IDS is not None:
+        return True  # explicit target → always overwrite (size check would miss same-size edits)
     key = KEY_PREFIX + p.name
     return existing.get(key) != p.stat().st_size  # missing or size changed
 

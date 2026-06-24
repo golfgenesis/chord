@@ -10,8 +10,8 @@ members watching the singer's pick).
 ## Features
 
 ### Browsing & search
-- **70k-song catalogue** loaded from a single ~1.4 MB obfuscated payload
-  (`public/songs.bin` — XOR + gzip, decoded client-side)
+- **70k-song catalogue** loaded from a single ~0.9 MB obfuscated payload
+  (`public/songs.bin` — XOR + brotli, decoded client-side)
 - **In-memory search** across every title in ~10–30 ms (NFC normalized,
   case-insensitive, capped at 500 results)
 - **Virtualized list** (`react-virtuoso`) — 70k rows scroll smoothly on
@@ -121,6 +121,17 @@ members watching the singer's pick).
 - **Share button** — `navigator.share` with clipboard fallback; flashes
   ✓ when the link is on the clipboard
 
+### Quick room join — no typing the 6-digit code
+- **QR code** — the room chip opens a sheet with a QR of the deep-link
+  (`{origin}/{roomCode}`). A bandmate scans the singer's iPad with any
+  camera → lands straight in the room. The QR library is lazy-loaded
+  (its own ~23 KB chunk, only when the sheet opens)
+- **Ultrasonic audio** — "แชร์ห้องนี้ผ่านเสียง" plays the 6 digits as
+  near-ultrasonic (~18–19 kHz) FSK tone bursts; "ฟังเพื่อเข้าห้องเพื่อน"
+  opens the mic, decodes them back, and joins the room. Best-effort
+  (proximity + quiet-room dependent) — QR is the reliable fallback. No
+  Web Bluetooth (iPad Safari blocks it)
+
 ### Misc UX
 - **Auto-open eye toggle** — explicit control over whether remote picks
   take over your screen
@@ -137,7 +148,10 @@ members watching the singer's pick).
 - Firebase Realtime DB (room sync) + Firestore (per-client cross-device sync)
 - vite-plugin-pwa (custom SW under `injectManifest`)
 - idb-keyval for persisted favorites/playlists/latest
-- Cloudflare R2 Custom Domain + Snippet (image hosting, see DEPLOY.md)
+- Cloudflare R2 Custom Domain + Snippet (image + ChordPro `.md` hosting, see DEPLOY.md)
+- `@google/genai` (Gemini 2.5 Flash) for offline ChordPro extraction;
+  `brotli` (payload decode), `qrcode` (room QR) — both client-side
+- Web Audio API (near-ultrasonic room-code transport)
 
 ## Get started
 
@@ -282,7 +296,7 @@ See `DEPLOY.md` for the click-by-click setup.
 The viewer's primary mode renders **inline ChordPro markdown**, not the image.
 Those sheets are extracted **offline** from the chord-sheet images by
 **Gemini 2.5 Flash** and distributed via R2 — they are *not* bundled into
-`songs.bin` (which stays ≈1.4 MB for fast in-memory search).
+`songs.bin` (which stays ≈0.9 MB for fast in-memory search).
 
 ```powershell
 # 1) get a free key → https://aistudio.google.com/apikey , put in .env.local:
@@ -304,6 +318,12 @@ npm run chordpro:ship
   offline before its text cached.
 - Fix one bad sheet: `node scripts/gemini-backfill.mjs --ids <id> --force`
   then `npm run chordpro:upload` + `npm run data`.
+- **Automatic for new songs** — `npm run sync` runs this extraction + `.md`
+  upload right after the image steps (scoped to the newly-scraped ids), so
+  fresh songs get their text hands-free. Use `--skip-chordpro` for images only.
+- **24/7 backfill** — a circuit breaker (`--max-rate-errors`, default 6) stops
+  a run cleanly at the daily-quota / 503 wall, so a resumable loop on a server
+  pauses and resumes day by day instead of churning the queue.
 
 ## Adding new songs
 
@@ -380,10 +400,12 @@ All scripts compute paths relative to `PROJECT_ROOT` (the parent of
   "alt": "คอร์ด คำสาป Playground" }
 ```
 
-`build-data.mjs` slims this down to `{id, name}` (strips the prefix +
-sanitises the filename), then XOR+gzip-obfuscates it as
-`public/songs.bin`. The image URL is reconstructed at runtime via
-`src/lib/imageUrl.ts` (`${BASE}/${encodeURIComponent(name)}.webp`).
+`build-data.mjs` slims this down to `{id, name}` (plus a 1-byte `t:1` marker
+when the song has a ChordPro sheet on R2), strips the prefix + sanitises the
+filename, then XOR+brotli-obfuscates it as `public/songs.bin`. The image URL is
+reconstructed at runtime via `src/lib/imageUrl.ts`
+(`${BASE}/${encodeURIComponent(name)}.webp`); the ChordPro text via
+`src/lib/chordText.ts` (`${TEXT_BASE}/${id}.md`).
 
 ### Filename rule
 

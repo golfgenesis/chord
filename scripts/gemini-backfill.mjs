@@ -98,29 +98,29 @@ function cleanName(alt) {
   return s || "untitled";
 }
 
-// ── extraction prompt — yields the format src/lib/chordpro.ts parses ─────────
-const PROMPT = `You are an expert music transcriber. You are given an image of a Thai song chord sheet (คอร์ดเพลง). Convert it into clean **Inline ChordPro** text.
+// ── system instruction (passed as Gemini `config.systemInstruction`) ─────────
+// ⚠ NOTE: this prompt asks the model for Markdown `### Section` headings, but the
+// in-app renderer (src/lib/chordpro.ts → ChordSheet.tsx) does NOT parse Markdown
+// headings — a `### Intro` line currently renders as the literal text "### Intro".
+// The renderer understands ChordPro directives, chord-only rows, and lyric lines
+// only. Either extend the parser to treat `#`/`##`/`###` lines as section headers,
+// or drop the heading instruction, before backfilling at scale.
+const SYSTEM_INSTRUCTION = `
+You are an expert music transcription assistant. Your critical task is to extract the lyrics and chords from this song sheet image and format the output directly into a standard Markdown file using valid inline ChordPro notation.
 
-STRICT RULES — output ONLY the ChordPro text. No code fences, no commentary, no explanations.
+CRITICAL ALIGNMENT RULES FOR THAI LYRICS & EN CHORDS:
+1. You must perform a rigorous character-by-character visual alignment tracking. In the source image, English chord markers sit exactly above specific Thai characters or syllables.
+2. You MUST preserve this horizontal layout position by embedding each chord marker inside square brackets \`[...]\` IMMEDIATELY BEFORE the exact Thai syllable or character it aligns with vertically (e.g., convert a chord 'Bm' sitting over 'เรา' into \`คน[Bm]เราหก[G]ล้ม\`).
+3. NEVER place chord brackets on their own separate lines above the lyrics. Chords and lyrics must be tightly interwoven into a single consolidated row per line.
+4. For lines with multiple continuous chords or instrumental rows (Intro/Instru), wrap EVERY single chord token inside its own brackets, including slash chords (e.g., \\\`[Bm][G][A]/[F#m]\\\`). Preserve the exact text-spacing between chords on these rows.
+5. Do not guess or shift the chords to generic starting positions. Treat the vertical synchronization as an absolute layout requirement.
+6. Look for original key or capo annotations at the very top of the image sheet. If visible, emit them using standard ChordPro tags (e.g., \`{key: D}\` or \`{note: Capo 1}\`) on the first lines of the markdown document.
 
-1. INLINE EVERY CHORD. In the image, chords are drawn on a separate line ABOVE the lyrics. DO NOT reproduce that two-line layout. Instead MERGE each chord into the lyric line by writing [Chord] immediately before the exact syllable that sits directly under it.
-   WRONG (chord left on its own line above the lyric — never do this):
-     [A7]
-     น้องเอยน้องคอยพี่หน่อย
-   RIGHT (chord merged inline at the syllable beneath it):
-     [A7]น้องเอยน้องคอย[D7]พี่หน่อย
-   The ONLY lines allowed to carry chords without lyrics are the purely instrumental rows in rule 3.
-2. Preserve the lyrics EXACTLY as printed — same words, spelling and line breaks. Do NOT translate, summarise, correct or add lyrics.
-3. Purely instrumental / chord-only rows (Intro, Solo, Outro, Instru, turnarounds with no words): keep the section label, then bracket EVERY chord, e.g.  Intro: [C] / [G] / [Am] / [F]   (x2)
-   On instrumental or intro rows where multiple chords are listed together, you MUST wrap EVERY single chord token inside its own square brackets, including slash chords (e.g. convert [F]C/E [Dm]C into [F][C/E] [Dm][C]). No chord token should ever be left naked without brackets.
-4. METADATA — read the TOP of the sheet (near the title / artist) for a key, capo, or tuning note and, only if it is actually visible (never guess), emit it as the FIRST line(s):
-   - a stated key  → {key: C}     (use a minor tonic like {key: Am} when the sheet says so)
-   - a capo        → {note: Capo 2}
-   - a tune-down   → {note: Tune down ½ tone to Eb}
-5. Keep one blank line between sections. Use standard chord names (C, G/B, Am7, F#m, Bb, Csus4 …). Keep section markers such as * / ** / (×2) as written.
-6. Never invent chords or lyrics that are not visible. Transcribe only what you can read.
-
-Output the ChordPro now:`;
+DOCUMENT STRUCTURE:
+- Organize section transitions cleanly using standard Markdown headings (e.g., \`### Intro\`, \`### Verse 1\`, \`### Chorus\`).
+- Maintain chorus repeat markers (*) or instrumental cues verbatim.
+- Output ONLY the raw formatted markdown text content block. Do not surround the final output with markdown code backticks (\`\`\`markdown), and do not provide any introductory commentary, preambles, or any conversational filler responses.
+`;
 
 // Strip a leading/trailing ```...``` fence if the model adds one anyway.
 function cleanResponse(text) {
@@ -202,8 +202,9 @@ async function main() {
 
       const response = await ai.models.generateContent({
         model: MODEL,
-        contents: [{ text: PROMPT }, { inlineData: img }],
+        contents: [{ inlineData: img }],
         config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
           temperature: 0,
           // Extraction is mechanical — skip the thinking budget so it's fast + cheap.
           thinkingConfig: { thinkingBudget: 0 },

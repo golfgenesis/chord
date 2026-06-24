@@ -3,7 +3,7 @@
 ```
 GitHub repo (F:\chord\)         Cloudflare R2  (chord-images)
    ├ src/                          70k WebP files (~2.5 GB)
-   ├ public/songs.bin (~1.4 MB)         │   bound to custom domain
+   ├ public/songs.bin (~0.9 MB)         │   bound to custom domain
    ├ scripts/                            │   img.yourdomain.com
    └ ...                                 │   (Snippet adds CORS)
         │                                │
@@ -23,7 +23,7 @@ hits R2 at the edge directly with no JS execution in the hot path.
 
 ## Privacy reality check
 
-`songs.bin` is an XOR+gzip-obfuscated copy of the song titles dataset.
+`songs.bin` is an XOR+brotli-obfuscated copy of the song titles dataset.
 It's downloaded by the browser to power search, so anyone who reverse-
 engineers the bundle can decode it. The obfuscation only stops trivial
 `curl | jq` scraping. Three levels, easy → hard:
@@ -82,6 +82,10 @@ your machine. You'll set them again as Pages env vars below.
    `VITE_IMAGE_BASE` must point at the R2 Custom Domain you'll set up
    in Step 3. The Snippet attached at that hostname returns CORS
    headers so the browser can `cache.put()` non-opaque responses.
+   `VITE_TEXT_BASE` is **optional** — the ChordPro `.md` sheets are
+   fetched from `${VITE_IMAGE_BASE}/md/<id>.md` by default (same bucket),
+   so only set it if you host the text on a different host. The SEO Pages
+   Function reads these same vars at the edge to fetch a song's text.
 4. Save & deploy. First build takes 1–2 minutes.
 
 The site is live at `https://<project>.pages.dev`. Bind a custom domain
@@ -240,9 +244,10 @@ just picks up where it left off.
 | Item | Location | In Git? | Notes |
 |---|---|---|---|
 | Webapp source | `src/` | yes | |
-| Songs payload | `public/songs.bin` | yes | XOR+gzip, ~1.4 MB; rebuild with `npm run data` |
+| Songs payload | `public/songs.bin` | yes | XOR+brotli, ~0.9 MB; rebuild with `npm run data` |
 | Raw scraped JSON | `data/results.json` | **no** | source of truth, stays local |
 | Image files | `images/` | **no** | WebP, uploaded to R2 separately |
+| ChordPro sheets | `data/songs-md/` | **no** | `.md`, uploaded to R2 under `md/<id>.md` (`npm run chordpro:upload`) |
 | Python scripts | `scripts/` | yes | committed alongside webapp |
 | Shared helpers | `scripts/_env.py`, `scripts/_r2.py` | yes | env loader + R2 client factory |
 | Credentials | `.env.local` | **no** | R2 + Firebase, re-enter as Pages env vars |
