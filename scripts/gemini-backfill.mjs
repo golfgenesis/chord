@@ -71,6 +71,13 @@ const ONLY_IDS = arg("--ids")
 const DELAY_MS = Number(arg("--delay", "4000")); // strict per-image delay (free tier)
 const MODEL = arg("--model", "gemini-2.5-flash");
 const IMAGE_BASE = process.env.VITE_IMAGE_BASE || ""; // R2 fallback when no local file
+// Circuit breaker: stop the run cleanly after this many BACK-TO-BACK rate /
+// quota / 503 errors (i.e. we've hit the daily-quota or overload wall). The
+// run exits 0 and is resumable — a 24/7 wrapper just sleeps and retries later,
+// instead of churning the whole queue against a wall. 0 disables it.
+const MAX_RATE_ERRORS = Number(arg("--max-rate-errors", "6"));
+// Transient errors worth backing off on AND counting toward the breaker.
+const RATE_RE = /\b429\b|\b503\b|quota|rate|RESOURCE_EXHAUSTED|UNAVAILABLE|overload|high demand/i;
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 if (!API_KEY) {
@@ -178,7 +185,7 @@ async function main() {
       (IMAGE_BASE ? `, R2 fallback ${IMAGE_BASE}` : ", local images only"),
   );
 
-  let ok = 0, skipped = 0, failed = 0;
+  let ok = 0, skipped = 0, failed = 0, consecutiveRateErrors = 0, hitWall = false;
   const t0 = Date.now();
 
   for (let i = 0; i < queue.length; i++) {
@@ -210,6 +217,7 @@ async function main() {
       } else {
         fs.writeFileSync(outPath, text + "\n", "utf8");
         ok++;
+        consecutiveRateErrors = 0; // a success means we're not at the wall
         const el = (Date.now() - t0) / 1000;
         const done = ok + failed + skipped;
         const eta = done > 0 ? (queue.length - done) * (el / done) : Infinity;
@@ -219,8 +227,20 @@ async function main() {
       failed++;
       const msg = String(err?.message || err);
       console.log(`  [${i + 1}/${queue.length}] #${r.id} ✗ ${msg.slice(0, 140)}`);
-      // Back off harder on rate-limit / quota errors so a 429 storm settles.
-      if (/429|quota|rate|RESOURCE_EXHAUSTED/i.test(msg)) await sleep(DELAY_MS * 4);
+      if (RATE_RE.test(msg)) {
+        consecutiveRateErrors++;
+        // Circuit breaker: we've hit the daily-quota / overload wall. Stop now
+        // (resumable) rather than failing the rest of the queue one by one.
+        if (MAX_RATE_ERRORS > 0 && consecutiveRateErrors >= MAX_RATE_ERRORS) {
+          hitWall = true;
+          console.log(
+            `\n⚠ hit the rate/quota wall (${consecutiveRateErrors} consecutive 429/503/quota errors).` +
+              ` Stopping cleanly — re-run later to resume (done songs are skipped).`,
+          );
+          break;
+        }
+        await sleep(DELAY_MS * 4); // back off harder so a 429/503 spike settles
+      }
     }
 
     // Strict per-image delay (free-tier pacing) — except after the last one.
@@ -228,8 +248,9 @@ async function main() {
   }
 
   console.log(
-    `\ndone — ${ok.toLocaleString()} extracted, ${skipped.toLocaleString()} no-image, ${failed.toLocaleString()} failed.\n` +
-      `next:  node scripts/build-data.mjs   (rebuild songs.bin)  &&  py -3.11 scripts/upload_md_r2.py   (push to R2)`,
+    `\ndone — ${ok.toLocaleString()} extracted, ${skipped.toLocaleString()} no-image, ${failed.toLocaleString()} failed` +
+      (hitWall ? " (stopped at rate/quota wall — resumable)" : "") +
+      `.\nnext:  node scripts/build-data.mjs   (rebuild songs.bin)  &&  python3 scripts/upload_md_r2.py   (push to R2)`,
   );
 }
 
