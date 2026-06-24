@@ -23,7 +23,15 @@ members watching the singer's pick).
   from the top
 
 ### Fullscreen chord viewer
-- Tap any row → fullscreen WebP chord sheet, served directly from R2
+- **ChordPro text first** — tap any row and the viewer fetches that song's
+  inline-ChordPro sheet (`.md`) from R2, renders it as reflowing text, and
+  lets you **transpose** to any key on the fly (music-theory based — no OCR).
+  The sheets are extracted offline by Gemini 2.5 Flash (see *ChordPro text*
+  below). The service worker caches each `.md` stale-while-revalidate, so a
+  song you've opened opens **instantly and works offline**.
+- **WebP image fallback** — songs not yet converted, or opened offline before
+  their text was cached, fall back to the original WebP chord sheet from R2
+  (cache-first). So shipping before the backfill finishes is fine.
 - **Image inversion toggle** (top-right ◐) — flips white paper → black,
   black ink → white, for stage-friendly dark mode while preserving any
   color highlights in the chord notation
@@ -231,7 +239,11 @@ F:\chord\
 │   ├── hooks\                       # useVisibleSongs, useRoomSongAlert,
 │   │                                # useAutoPrefetch
 │   └── lib\                         # firebase, cloudSync, persist, search,
-│                                    # songsCodec, imageUrl, offlineDownload
+│                                    # songsCodec, imageUrl, chordText,
+│                                    # chordpro, offlineDownload
+├── data\
+│   ├── results.json                 # source dataset (gitignored)
+│   └── songs-md\                    # ChordPro .md sheets (gitignored → R2)
 ├── scripts\
 │   ├── _env.py                      # loads .env.local into os.environ
 │   ├── _r2.py                       # boto3 R2 client factory
@@ -239,11 +251,13 @@ F:\chord\
 │   ├── download.py                  # PNG downloader (source format)
 │   ├── sync_names.py                # rectify alt ↔ filename (PNG stage)
 │   ├── convert_to_webp.py           # PNG → WebP in place, delete source
-│   ├── upload_r2.py                 # bulk upload to R2 (resumable)
+│   ├── upload_r2.py                 # bulk image upload to R2 (resumable)
+│   ├── gemini-backfill.mjs          # chord-sheet image → ChordPro .md (Gemini 2.5 Flash)
+│   ├── upload_md_r2.py              # upload data/songs-md/*.md → R2 md/<id>.md
 │   ├── scan_weird_chars.py          # spot invisible control chars in titles
-│   ├── build-data.mjs               # results.json → public/songs.bin
+│   ├── build-data.mjs               # results.json → public/songs.bin (+ t flag)
 │   ├── check_sync.py                # cross-check results.json ↔ images/ ↔ R2
-│   ├── sync.py                      # one-stop pipeline (probe→scrape→…→push)
+│   ├── sync.py                      # one-stop image pipeline (probe→scrape→…→push)
 │   └── pipeline.ps1                 # legacy: upload + build + push only
 ├── .env.example, .env.local (gitignored)
 └── CLAUDE.md, DEPLOY.md, README.md
@@ -262,6 +276,34 @@ hostname adds `Access-Control-Allow-Origin: *` so responses are
 and the offline cache fits in ~3 GB instead of ~500 GB.
 
 See `DEPLOY.md` for the click-by-click setup.
+
+## ChordPro text (chord sheets as text)
+
+The viewer's primary mode renders **inline ChordPro markdown**, not the image.
+Those sheets are extracted **offline** from the chord-sheet images by
+**Gemini 2.5 Flash** and distributed via R2 — they are *not* bundled into
+`songs.bin` (which stays ≈1.4 MB for fast in-memory search).
+
+```powershell
+# 1) get a free key → https://aistudio.google.com/apikey , put in .env.local:
+#    GEMINI_API_KEY=...
+npm run chordpro:backfill   # image → data/songs-md/<id>.md  (resumable, 4s/img, skips cached)
+npm run data                # rebuild songs.bin (bakes a `t` has-text marker per song)
+npm run chordpro:upload     # push data/songs-md/*.md → R2 under md/<id>.md
+# or all three at once:
+npm run chordpro:ship
+```
+
+- **Resumable** — already-extracted songs (a `data/songs-md/<id>.md` exists)
+  are skipped; Ctrl+C and re-run any time. `--limit N`, `--start ID`,
+  `--ids 1,2,3`, `--force` flags scope a run.
+- **`data/songs-md/` is gitignored** (like `images/`); R2 is the distribution.
+  The committed `songs.bin` only carries the 1-byte `t` flag per song with text.
+- **Offline** — the service worker caches each `.md` stale-while-revalidate;
+  the client falls back to the WebP image when a song has no text / is opened
+  offline before its text cached.
+- Fix one bad sheet: `node scripts/gemini-backfill.mjs --ids <id> --force`
+  then `npm run chordpro:upload` + `npm run data`.
 
 ## Adding new songs
 

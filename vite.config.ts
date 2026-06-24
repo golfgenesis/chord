@@ -4,64 +4,43 @@ import legacy from "@vitejs/plugin-legacy";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const IMAGES_DIR = path.resolve(__dirname, "images");
+const SONGS_MD_DIR = path.resolve(__dirname, "data", "songs-md");
 
-// Owner-only "fix this flagged song with the vision model" endpoints. These exist ONLY on the
-// Vite dev server (configureServer runs only under `npm run dev`) — they are never built into
-// dist/, so production has no way to invoke `claude`. The client gates the Fix button on
-// import.meta.env.DEV AND a positive /api/vlm-status probe, so it only appears when you're
-// running dev locally on a machine where the Claude Code CLI is installed.
-//   GET  /api/vlm-status      → { claude: boolean }   (is `claude` on PATH?)
-//   POST /api/vlm-fix?id=<n>  → runs scripts/vlm_chordpro.py <n> --force, refreshes flags,
-//                               rebuilds songs.bin; returns { ok, log }.
-function vlmFixMiddleware(): Plugin {
-  const json = (res: ServerResponse, code: number, obj: unknown) => {
-    res.statusCode = code;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(obj));
-  };
+// Serve data/songs-md/<id>.md at /md/<id>.md (dev only). Lets you test the
+// ChordPro text flow locally without uploading to R2 first. In prod the same
+// files live on R2 and the client builds URLs from VITE_TEXT_BASE/VITE_IMAGE_BASE
+// (see src/lib/chordText.ts). 404 → the viewer falls back to the image.
+function mdMiddleware(): Plugin {
   return {
-    name: "vlm-fix-dev",
+    name: "serve-songs-md",
     configureServer(server: ViteDevServer) {
-      server.middlewares.use("/api/vlm-status", (_req, res) => {
-        let claude = false;
-        try {
-          claude = spawnSync("claude --version", { shell: true, timeout: 10000 }).status === 0;
-        } catch {
-          /* not on PATH → stays false */
-        }
-        json(res, 200, { claude });
-      });
-
-      server.middlewares.use("/api/vlm-fix", (req: IncomingMessage, res: ServerResponse) => {
-        if (req.method !== "POST") return json(res, 405, { ok: false, error: "POST only" });
-        const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
-        if (!/^\d+$/.test(id)) return json(res, 400, { ok: false, error: "bad id" });
-
-        // 1) re-extract this one song with the vision model (subscription via `claude -p`)
-        const vlm = spawnSync(`py -3.11 scripts/vlm_chordpro.py ${id} --force`, {
-          cwd: __dirname, shell: true, encoding: "utf8", timeout: 300000,
-        });
-        if (vlm.status !== 0)
-          return json(res, 500, { ok: false, step: "vlm", log: (vlm.stdout ?? "") + (vlm.stderr ?? "") });
-
-        // 2) refresh _flagged.tsv (the now-fixed song drops off it — its VLM text isn't flagged)
-        spawnSync("py -3.11 scripts/extract_chordpro.py --check", {
-          cwd: __dirname, shell: true, encoding: "utf8", timeout: 120000,
-        });
-
-        // 3) rebuild songs.bin so the reloaded client picks up the new text + cleared flag
-        const build = spawnSync("node scripts/build-data.mjs", {
-          cwd: __dirname, shell: true, encoding: "utf8", timeout: 120000,
-        });
-        if (build.status !== 0)
-          return json(res, 500, { ok: false, step: "build", log: (build.stdout ?? "") + (build.stderr ?? "") });
-
-        json(res, 200, { ok: true, log: (vlm.stdout ?? "") + "\n" + (build.stdout ?? "") });
-      });
+      server.middlewares.use(
+        "/md",
+        (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
+          try {
+            const decoded = decodeURIComponent((req.url ?? "").split("?")[0]);
+            const filePath = path.join(SONGS_MD_DIR, decoded);
+            if (!filePath.startsWith(SONGS_MD_DIR)) {
+              res.statusCode = 403;
+              return res.end("forbidden");
+            }
+            if (!fs.existsSync(filePath)) {
+              res.statusCode = 404;
+              return res.end("not found");
+            }
+            res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+            // Short TTL in dev so a re-backfill is picked up on refresh.
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            fs.createReadStream(filePath).pipe(res);
+          } catch (err) {
+            next(err);
+          }
+        },
+      );
     },
   };
 }
@@ -102,7 +81,7 @@ export default defineConfig({
   plugins: [
     react(),
     imagesMiddleware(),
-    vlmFixMiddleware(),
+    mdMiddleware(),
     // Emit a second "legacy" bundle for old browsers that don't support
     // native ES modules / modern syntax. Vite 8's default build target
     // only covers Safari 14+ / Chrome ~130+ — without this, anyone on

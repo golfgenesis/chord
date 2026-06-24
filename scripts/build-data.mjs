@@ -3,7 +3,7 @@
 // "คอร์ด " prefix from each title.
 //
 //   results.json record: { id, src, alt: "คอร์ด คำสาป Playground" }
-//   slim record:         { id, name: "คำสาป Playground" }
+//   slim record:         { id, name: "คำสาป Playground" }   (+ t:1 if it has text)
 //
 // The image file is always `${name}.webp` (see src/lib/imageUrl.ts) — keeping
 // it out of the payload saves ~30% on the wire. The on-disk dataset under
@@ -11,7 +11,19 @@
 // (Windows-sanitization, "_${id}" disambiguation on case-insensitive
 // collisions) mirror Python sync_names.py exactly.
 //
-// Wire format (public/songs.bin):  XOR(gzip(JSON), KEY)
+// ChordPro TEXT is deliberately NOT bundled here. It lives as data/songs-md/
+// <id>.md (Gemini backfill) → uploaded to R2 → fetched per-song at view time
+// and SW-cached for offline. The payload only carries a 1-byte `t: 1` marker
+// for songs that have a sheet, so the SEO Pages Function (functions/song) and
+// any "indexable set" logic stay cheap without shipping the text to every
+// client. This is what keeps songs.bin tiny for the 10 ms in-memory search.
+//
+// Wire format (public/songs.bin):  XOR(brotli(JSON), KEY)
+// Brotli (quality 11) is ~37% smaller than gzip on this dataset. The browser
+// can't decode brotli via DecompressionStream (that API only does gzip/deflate),
+// so the client decodes with the `brotli` npm package — see src/lib/songsCodec.ts;
+// the SSR Pages Function (functions/song) decodes the same way. zlib's brotli
+// output is standard RFC 7932, so the JS-package decoder reads it byte-for-byte.
 // The same KEY is hard-coded in src/lib/songsCodec.ts — if you change one,
 // change both, or existing clients won't be able to decode the new bundle.
 //
@@ -49,32 +61,17 @@ if (!fs.existsSync(SRC)) {
 }
 const records = JSON.parse(fs.readFileSync(SRC, "utf8"));
 
-// ChordPro text (chords-as-text replacement for the image) produced offline by
-// scripts/extract_chordpro.py → data/chordpro/<id>.txt. When a song has one, we
-// ship it inline in the payload as `cp` so the client renders text + transposes
-// instead of fetching the image. Missing → song keeps the image flow.
-const CHORDPRO_DIR = path.join(PROJECT_ROOT, "data", "chordpro");
-const chordpro = new Map();
-if (fs.existsSync(CHORDPRO_DIR)) {
-  for (const f of fs.readdirSync(CHORDPRO_DIR)) {
-    const m = f.match(/^(\d+)\.txt$/);
-    if (m) chordpro.set(Number(m[1]), fs.readFileSync(path.join(CHORDPRO_DIR, f), "utf8"));
-  }
-}
-
-// QA flags from `chordpro:check` → data/chordpro/_flagged.tsv (id \t english \t thai).
-// We ship the THAI reason as `flag` on the song so the owner sees, in-app, what the checker
-// suspects is wrong. It's rendered ONLY for OWNER_EMAILS (client-side gate) — a soft review
-// aid, consistent with the existing owner-only image toggle, not secret data.
-const FLAGGED_TSV = path.join(CHORDPRO_DIR, "_flagged.tsv");
-const flags = new Map();
-if (fs.existsSync(FLAGGED_TSV)) {
-  for (const line of fs.readFileSync(FLAGGED_TSV, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    const cols = line.split("\t");
-    const id = Number(cols[0]);
-    const th = (cols[2] ?? cols[1] ?? "").trim(); // thai col, fall back to english
-    if (Number.isInteger(id) && th) flags.set(id, th);
+// Which songs have a ChordPro sheet? We only need the SET of ids — the text
+// itself ships to R2 as data/songs-md/<id>.md and is fetched per song at view
+// time (NOT bundled). The `t: 1` marker below lets the SEO Pages Function and
+// the "indexable / related songs" logic know which pages have real content,
+// without paying the payload cost of the full markdown for every client.
+const SONGS_MD_DIR = path.join(PROJECT_ROOT, "data", "songs-md");
+const hasText = new Set();
+if (fs.existsSync(SONGS_MD_DIR)) {
+  for (const f of fs.readdirSync(SONGS_MD_DIR)) {
+    const m = f.match(/^(\d+)\.md$/);
+    if (m) hasText.add(Number(m[1]));
   }
 }
 
@@ -89,27 +86,29 @@ const slim = records.map((r) => {
   const base = cleanName(r.alt);
   const dup = counts.get(base.toLowerCase()) > 1;
   const name = dup ? `${base}_${r.id}` : base;
-  const cp = chordpro.get(r.id);
-  const flag = flags.get(r.id);
   const rec = { id: r.id, name };
-  if (cp) rec.cp = cp;
-  if (flag) rec.flag = flag;
+  if (hasText.has(r.id)) rec.t = 1; // has a ChordPro sheet on R2 (indexable)
   return rec;
 });
 console.log(
-  `build-data: ${slim.length} songs, ${chordpro.size} with ChordPro text, ${flags.size} flagged`,
+  `build-data: ${slim.length} songs, ${hasText.size} with ChordPro text (on R2)`,
 );
 
 const json = Buffer.from(JSON.stringify(slim), "utf8");
-const gz = zlib.gzipSync(json, { level: 9 });
+const compressed = zlib.brotliCompressSync(json, {
+  params: {
+    [zlib.constants.BROTLI_PARAM_QUALITY]: 11, // max ratio (build-time, one-off)
+    [zlib.constants.BROTLI_PARAM_SIZE_HINT]: json.length,
+  },
+});
 const klen = KEY.length;
-for (let i = 0; i < gz.length; i++) gz[i] ^= KEY[i % klen];
+for (let i = 0; i < compressed.length; i++) compressed[i] ^= KEY[i % klen];
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
-fs.writeFileSync(OUT, gz);
+fs.writeFileSync(OUT, compressed);
 // Remove the legacy plaintext file if it still exists from an older build.
 if (fs.existsSync(STALE_JSON)) fs.unlinkSync(STALE_JSON);
 
 console.log(`Wrote ${slim.length.toLocaleString()} songs to ${OUT}`);
 console.log(`  json:    ${(json.length / 1024 / 1024).toFixed(2)} MB`);
-console.log(`  gzip:    ${(gz.length / 1024 / 1024).toFixed(2)} MB (obfuscated)`);
+console.log(`  brotli:  ${(compressed.length / 1024 / 1024).toFixed(2)} MB (obfuscated)`);

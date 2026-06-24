@@ -22,11 +22,13 @@
 // The rendered HTML is edge-cached (caches.default) so Googlebot hammering 70k
 // pages mostly hits cache, and the payload decode happens only on a cold isolate.
 
+import brotliDecompress from "brotli/decompress";
+
 const XOR_KEY_HEX = "9c4f1d6a3e80b5b27cdb1f24a8e6b35a2710f87c4d65e3b9af8c01d72e64b395";
 const SITE_NAME = "Chord";
 
 // ---- decode + cache the songs payload (once per isolate) --------------------
-let SONGS = null; // Map<id, {id,name,cp?}>
+let SONGS = null; // Map<id, {id,name,t?}>  (t:1 = has a ChordPro sheet on R2)
 
 function hexToBytes(hex) {
   const out = new Uint8Array(hex.length / 2);
@@ -40,8 +42,11 @@ async function loadSongs(env, origin) {
   const res = await env.ASSETS.fetch(new Request(`${origin}/songs.bin`));
   const bytes = new Uint8Array(await res.arrayBuffer());
   for (let i = 0; i < bytes.length; i++) bytes[i] ^= KEY[i % KEY.length];
-  const ds = new DecompressionStream("gzip");
-  const text = await new Response(new Response(bytes).body.pipeThrough(ds)).text();
+  // songs.bin is XOR(brotli(JSON)). The Workers runtime's DecompressionStream
+  // only does gzip/deflate, so decode with the same `brotli` package the client
+  // uses (kept in sync with src/lib/songsCodec.ts / scripts/build-data.mjs).
+  const out = brotliDecompress(bytes);
+  const text = new TextDecoder().decode(out);
   const arr = JSON.parse(text);
   const map = new Map();
   for (const s of arr) map.set(s.id, s);
@@ -63,18 +68,36 @@ export function slugify(name) {
   );
 }
 
-// Sorted [{id,name}] of indexable (cp) songs, cached per isolate. Drives the
-// internal "related songs" links: the sitemap gives Google DISCOVERY, these
+// Sorted [{id,name}] of indexable (has-text) songs, cached per isolate. Drives
+// the internal "related songs" links: the sitemap gives Google DISCOVERY, these
 // links give CRAWL DEPTH + spread authority + add on-page content (less thin).
 // The neighbour-wrap fill guarantees every page is reachable from every other.
+// `s.t` is the lightweight has-ChordPro-sheet marker from build-data.mjs (the
+// text itself lives on R2, fetched per request below — not in the payload).
 let CP_LIST = null;
 function cpList(songs) {
   if (CP_LIST) return CP_LIST;
   CP_LIST = [...songs.values()]
-    .filter((s) => s.cp)
+    .filter((s) => s.t)
     .map((s) => ({ id: s.id, name: s.name }))
     .sort((a, b) => a.id - b.id);
   return CP_LIST;
+}
+
+// Fetch a song's ChordPro markdown from R2 (the same file the app fetches at
+// view time). Edge-cached at the HTML layer, so this only runs on a cold cache.
+// Returns the raw text, or null when the song has no sheet / the fetch fails.
+async function fetchChordText(env, id) {
+  const base = env.VITE_TEXT_BASE || (env.VITE_IMAGE_BASE ? `${String(env.VITE_IMAGE_BASE).replace(/\/+$/, "")}/md` : "");
+  if (!base) return null;
+  try {
+    const res = await fetch(`${base}/${id}.md`);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.trim() ? text : null;
+  } catch {
+    return null;
+  }
 }
 function tokenize(name) {
   return String(name)
@@ -342,8 +365,11 @@ export async function onRequest(context) {
     return Response.redirect(`${origin}/song/${id}/${encodeURIComponent(slug)}`, 301);
   }
 
-  const indexable = Boolean(song.cp);
-  const sheet = song.cp ? renderSheet(song.cp) : { text: "", meta: {}, chords: [] };
+  // The has-text marker decides indexability cheaply; the text itself comes
+  // from R2 only when we actually need to render the sheet (indexable pages).
+  const indexable = Boolean(song.t);
+  const cp = indexable ? await fetchChordText(env, id) : null;
+  const sheet = cp ? renderSheet(cp) : { text: "", meta: {}, chords: [] };
   const canonicalUrl = `https://chord.golfchairat.com/song/${id}/${encodeURIComponent(slug)}`;
 
   const related = indexable ? relatedSongs(songs, song) : [];
