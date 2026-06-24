@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp, useIsRoomOwner } from "../store";
 import { CheckIcon, XIcon } from "./icons";
+import { ProximityShareSheet } from "./ProximityShareSheet";
 
 /**
  * Room code badge + randomize button, designed to sit next to the Tabs
@@ -14,6 +15,7 @@ export function RoomControls() {
   const isOwner = useIsRoomOwner();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(roomCode);
+  const [shareOpen, setShareOpen] = useState(false);
 
   function commitRoom() {
     if (/^\d{6}$/.test(draft)) setRoomCode(draft);
@@ -41,16 +43,47 @@ export function RoomControls() {
         onCancel={cancelRoom}
       />
       {!editing && (
-        <button
-          onClick={randomizeRoom}
-          title="สุ่มเลขห้องใหม่"
-          aria-label="Random room"
-          className="grid size-9 place-items-center rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95 sm:size-10"
-        >
-          <RefreshIcon />
-        </button>
+        <>
+          <button
+            onClick={() => setShareOpen(true)}
+            title="เข้าห้องแบบรวดเร็ว (QR / เสียง)"
+            aria-label="Share room via QR or audio"
+            className="grid size-9 place-items-center rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95 sm:size-10"
+          >
+            <QrIcon />
+          </button>
+          <button
+            onClick={randomizeRoom}
+            title="สุ่มเลขห้องใหม่"
+            aria-label="Random room"
+            className="grid size-9 place-items-center rounded-xl border border-line/70 bg-bg-card/60 text-ink-dim shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] transition hover:border-brand/40 hover:bg-bg-hover hover:text-ink active:scale-95 sm:size-10"
+          >
+            <RefreshIcon />
+          </button>
+        </>
       )}
+      <ProximityShareSheet open={shareOpen} onClose={() => setShareOpen(false)} />
     </div>
+  );
+}
+
+function QrIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-[18px]"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <path d="M14 14h3v3M21 14v.01M14 21h.01M21 17v4h-4" />
+    </svg>
   );
 }
 
