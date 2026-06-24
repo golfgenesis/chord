@@ -6,8 +6,9 @@
 //
 //   • RESUMABLE — a song whose data/songs-md/<id>.md already exists is skipped,
 //     so you can Ctrl+C any time and re-run to pick up where you left off.
-//   • FREE-TIER SAFE — a strict delay (default 4500 ms) sits between every image
-//     so we stay under the Gemini API free-tier rate limit (~15 req/min).
+//   • CONCURRENT — a worker pool (--concurrency, default 32) + a launch gate
+//     (--delay ms between API calls, default 60 = ~1000 RPM) saturate a paid
+//     tier. The circuit breaker stops cleanly at the daily-request (RPD) wall.
 //   • IMAGE SOURCE — local images/<name>.webp if present (free, fast), else the
 //     R2 Custom Domain (VITE_IMAGE_BASE). Filename rules mirror build-data.mjs.
 //
@@ -21,8 +22,9 @@
 //   node scripts/gemini-backfill.mjs --limit 50     # just the next 50 (smoke test)
 //   node scripts/gemini-backfill.mjs --start 70570  # only ids >= 70570
 //   node scripts/gemini-backfill.mjs --ids 11,19,42 # specific ids (re-runs them)
-//   node scripts/gemini-backfill.mjs --force        # re-extract even if cached
-//   node scripts/gemini-backfill.mjs --delay 6000   # slower (extra-safe) pacing
+//   node scripts/gemini-backfill.mjs --force                # re-extract even if cached
+//   node scripts/gemini-backfill.mjs --concurrency 64       # more parallelism (push toward 1000 RPM)
+//   node scripts/gemini-backfill.mjs --delay 120            # gentler pacing (≤500 RPM)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -68,7 +70,8 @@ const START = arg("--start") != null ? Number(arg("--start")) : 0;
 const ONLY_IDS = arg("--ids")
   ? new Set(arg("--ids").split(",").map((s) => Number(s.trim())).filter(Number.isFinite))
   : null;
-const DELAY_MS = Number(arg("--delay", "4500")); // strict per-image delay (free tier)
+const DELAY_MS = Math.max(1, Number(arg("--delay", "60"))); // min ms between API-call launches (rate gate). 60 = 1000 RPM (Tier-1 cap); ~50 ≈ 1200 RPM would 429
+const CONCURRENCY = Math.max(1, Number(arg("--concurrency", "32"))); // parallel in-flight requests
 const MODEL = arg("--model", "gemini-2.5-flash");
 const IMAGE_BASE = process.env.VITE_IMAGE_BASE || ""; // R2 fallback when no local file
 // Circuit breaker: stop the run cleanly after this many BACK-TO-BACK rate /
@@ -111,14 +114,14 @@ You are an expert music transcription assistant. Your critical task is to extrac
 CRITICAL ALIGNMENT RULES FOR THAI LYRICS & EN CHORDS:
 1. You must perform a rigorous character-by-character visual alignment tracking. In the source image, English chord markers sit exactly above specific Thai characters or syllables.
 2. You MUST preserve this horizontal layout position by embedding each chord marker inside square brackets \`[...]\` IMMEDIATELY BEFORE the exact Thai syllable or character it aligns with vertically (e.g., convert a chord 'Bm' sitting over 'เรา' into \`คน[Bm]เราหก[G]ล้ม\`).
-3. NEVER place chord brackets on their own separate lines above the lyrics. Chords and lyrics must be tightly interwoven into a single consolidated row per line.
+3. NEVER place chord brackets on their own separate line above a lyric, and NEVER repeat them. The chord line drawn above a lyric in the image becomes ONLY the inline [chord] markers inside that one lyric line — do NOT ALSO output those chords as a separate row above it. Every chord appears EXACTLY ONCE. A standalone chord-only row is allowed solely for a purely instrumental passage that has no lyrics at all (an Intro/Solo/turnaround break).
 4. For lines with multiple continuous chords or instrumental rows (Intro/Instru), wrap EVERY single chord token inside its own brackets, including slash chords (e.g., \\\`[Bm][G][A]/[F#m]\\\`). Preserve the exact text-spacing between chords on these rows.
 5. Do not guess or shift the chords to generic starting positions. Treat the vertical synchronization as an absolute layout requirement.
 6. Look for original key or capo annotations at the very top of the image sheet. If visible, emit them using standard ChordPro tags (e.g., \`{key: D}\` or \`{note: Capo 1}\`) on the first lines of the markdown document.
 
 DOCUMENT STRUCTURE:
-- Organize section transitions cleanly using standard Markdown headings (e.g., \`### Intro\`, \`### Verse 1\`, \`### Chorus\`).
-- Maintain chorus repeat markers (*) or instrumental cues verbatim.
+- Put each section label INLINE on the same line as its chords, exactly like the sheet — e.g. \`Intro / [D] / [A]\` or \`Instru / [Bm] / [G] / [A]\`. DO NOT use Markdown headings (#, ##, ###); they are NOT section markers here and render as literal text.
+- Maintain chorus/verse repeat markers (* / **) and repeat counts ((×2), (2 Times)) verbatim.
 - Output ONLY the raw formatted markdown text content block. Do not surround the final output with markdown code backticks (\`\`\`markdown), and do not provide any introductory commentary, preambles, or any conversational filler responses.
 `;
 
@@ -181,25 +184,39 @@ async function main() {
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
   console.log(
-    `gemini-backfill: ${queue.length.toLocaleString()} songs → ${MODEL}, ${DELAY_MS} ms/image` +
+    `gemini-backfill: ${queue.length.toLocaleString()} songs → ${MODEL}, ` +
+      `concurrency ${CONCURRENCY}, gate ${DELAY_MS} ms (≤${Math.round(60000 / DELAY_MS).toLocaleString()} RPM)` +
       (IMAGE_BASE ? `, R2 fallback ${IMAGE_BASE}` : ", local images only"),
   );
 
   let ok = 0, skipped = 0, failed = 0, consecutiveRateErrors = 0, hitWall = false;
   const t0 = Date.now();
 
-  for (let i = 0; i < queue.length; i++) {
-    const r = queue[i];
+  // Launch gate. Reserve the next slot SYNCHRONOUSLY (bump `nextSlot` before any
+  // await) so concurrent workers get distinct, evenly-spaced launch times — a
+  // hard ceiling of 60000/DELAY_MS requests/min no matter how many workers run.
+  // DELAY_MS = 60 → 1000 RPM (the Tier-1 cap).
+  let nextSlot = 0;
+  async function rateGate() {
+    const now = Date.now();
+    const slot = Math.max(now, nextSlot);
+    nextSlot = slot + DELAY_MS;
+    const wait = slot - now;
+    if (wait > 0) await sleep(wait);
+  }
+
+  async function processOne(r) {
     const name = nameFor(r);
     const outPath = path.join(OUT_DIR, `${r.id}.md`);
     try {
       const img = await loadImageBase64(name);
       if (!img) {
         skipped++;
-        console.log(`  [${i + 1}/${queue.length}] #${r.id} — no image, skip (${name})`);
-        continue; // no delay; nothing was sent
+        console.log(`  #${r.id} — no image, skip (${name})`);
+        return;
       }
-
+      await rateGate(); // pace only the billable API call (the image load above is free/local)
+      if (hitWall) return;
       const response = await ai.models.generateContent({
         model: MODEL,
         contents: [{ inlineData: img }],
@@ -210,43 +227,54 @@ async function main() {
           thinkingConfig: { thinkingBudget: 0 },
         },
       });
-
       const text = cleanResponse(response.text);
       if (!text) {
         failed++;
-        console.log(`  [${i + 1}/${queue.length}] #${r.id} — empty response, skip`);
-      } else {
-        fs.writeFileSync(outPath, text + "\n", "utf8");
-        ok++;
-        consecutiveRateErrors = 0; // a success means we're not at the wall
-        const el = (Date.now() - t0) / 1000;
-        const done = ok + failed + skipped;
-        const eta = done > 0 ? (queue.length - done) * (el / done) : Infinity;
-        console.log(`  [${i + 1}/${queue.length}] #${r.id} ✓ ${name.slice(0, 40)} — ETA ${fmtEta(eta)}`);
+        console.log(`  #${r.id} — empty response, skip`);
+        return;
       }
+      fs.writeFileSync(outPath, text + "\n", "utf8");
+      ok++;
+      consecutiveRateErrors = 0; // a success means we're not at the wall
+      const done = ok + failed + skipped;
+      const el = (Date.now() - t0) / 1000;
+      const rate = el > 0 ? (ok / el) * 60 : 0;
+      const eta = done > 0 ? (queue.length - done) * (el / done) : Infinity;
+      console.log(`  [${done}/${queue.length}] #${r.id} ✓ ${name.slice(0, 36)} — ${rate.toFixed(0)}/min · ETA ${fmtEta(eta)}`);
     } catch (err) {
       failed++;
       const msg = String(err?.message || err);
-      console.log(`  [${i + 1}/${queue.length}] #${r.id} ✗ ${msg.slice(0, 140)}`);
+      console.log(`  #${r.id} ✗ ${msg.slice(0, 120)}`);
       if (RATE_RE.test(msg)) {
         consecutiveRateErrors++;
-        // Circuit breaker: we've hit the daily-quota / overload wall. Stop now
-        // (resumable) rather than failing the rest of the queue one by one.
-        if (MAX_RATE_ERRORS > 0 && consecutiveRateErrors >= MAX_RATE_ERRORS) {
+        // Circuit breaker: N consecutive rate/quota/503 errors = the daily-request
+        // (RPD) or overload wall. Flip `hitWall` so workers drain and stop —
+        // resumable, beats failing the rest of the queue one by one against a wall.
+        if (MAX_RATE_ERRORS > 0 && consecutiveRateErrors >= MAX_RATE_ERRORS && !hitWall) {
           hitWall = true;
           console.log(
             `\n⚠ hit the rate/quota wall (${consecutiveRateErrors} consecutive 429/503/quota errors).` +
               ` Stopping cleanly — re-run later to resume (done songs are skipped).`,
           );
-          break;
         }
-        await sleep(DELAY_MS * 4); // back off harder so a 429/503 spike settles
       }
     }
-
-    // Strict per-image delay (free-tier pacing) — except after the last one.
-    if (i < queue.length - 1) await sleep(DELAY_MS);
   }
+
+  // Concurrent worker pool. Each worker pulls the next queue index until the
+  // queue drains or the breaker trips. The file-skip filter above already left
+  // only un-done songs in `queue`, so the whole run stays resumable.
+  let nextIdx = 0;
+  async function worker() {
+    while (!hitWall) {
+      const i = nextIdx++;
+      if (i >= queue.length) return;
+      await processOne(queue[i]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker()),
+  );
 
   console.log(
     `\ndone — ${ok.toLocaleString()} extracted, ${skipped.toLocaleString()} no-image, ${failed.toLocaleString()} failed` +

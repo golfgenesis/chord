@@ -155,7 +155,11 @@ export function parseChordpro(src: string): ParsedSheet {
   const chords: string[] = [];
 
   for (const rawLine of src.replace(/\r\n?/g, "\n").split("\n")) {
-    const line = rawLine.replace(/\s+$/, ""); // trim trailing ws, keep leading
+    let line = rawLine.replace(/\s+$/, ""); // trim trailing ws, keep leading
+    // Strip a stray Markdown heading prefix ("### Intro" → "Intro"). The sheets
+    // use inline section labels, not headings; an early extraction prompt emitted
+    // "### Intro", which would otherwise render as the literal text "### Intro".
+    line = line.replace(/^\s{0,3}#{1,6}[ \t]+(?=\S)/, "");
 
     const dir = line.match(DIRECTIVE_RE);
     if (dir) {
