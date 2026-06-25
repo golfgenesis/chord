@@ -1,6 +1,6 @@
 r"""
 One-stop pipeline: probe source → scrape new pages → download → convert
-→ extract ChordPro (Gemini) → upload images + ChordPro → verify
+→ extract ChordPro (local Ollama) → upload images + ChordPro → verify
 → rebuild songs.bin → (optional) git commit + push.
 
 Each step shells out to the existing per-step script, so they remain
@@ -25,6 +25,8 @@ USAGE
 
   py F:\chord\scripts\sync.py --skip-chordpro
       Images only — don't extract/upload the ChordPro text for new songs.
+      Same effect if Ollama isn't running: the step is optional and won't
+      abort the image pipeline.
 
   py F:\chord\scripts\sync.py --push
       Also git-commit + push the rebuilt songs.bin at the very end.
@@ -38,8 +40,8 @@ PREREQUISITES (one-time)
   - py -m pip install requests beautifulsoup4 lxml boto3 tqdm
   - cwebp on PATH or `CWEBP` env var pointing at the binary
   - R2_ACCESS_KEY / R2_SECRET_KEY in <project_root>/.env.local
-  - node on PATH + GEMINI_API_KEY in .env.local (for the ChordPro step;
-    skip with --skip-chordpro if you only want the images)
+  - node on PATH + a local Ollama runtime with a vision model pulled
+    (for the ChordPro step; skip with --skip-chordpro for images only)
 """
 
 from __future__ import annotations
@@ -219,7 +221,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-chordpro",
         action="store_true",
-        help="Don't run the Gemini ChordPro extraction / .md upload for new songs.",
+        help="Don't run the local ChordPro extraction / .md upload for new songs.",
     )
     parser.add_argument("--skip-upload", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
@@ -297,12 +299,12 @@ def main() -> None:
     # Extract ChordPro text for the NEW songs right after their images exist.
     # Scoped to the new range (--start) so a sync run never tries to backfill
     # the whole catalogue; resumable (skips songs that already have a .md).
-    # OPTIONAL: a missing GEMINI_API_KEY / rate-limit must NOT abort the proven
+    # OPTIONAL: Ollama being down / a model not pulled must NOT abort the proven
     # image pipeline — the new songs still work via the image fallback, and the
     # text can be filled in later with `npm run chordpro:backfill`.
     if not args.skip_chordpro and start <= end:
-        steps.append(Step("Extract ChordPro (Gemini) for new songs", [
-            "node", SCRIPTS / "gemini-backfill.mjs", "--start", start,
+        steps.append(Step("Extract ChordPro (local Ollama) for new songs", [
+            "node", SCRIPTS / "local-backfill.mjs", "--start", start,
         ], optional=True))
     if not args.skip_upload:
         steps.append(Step("Upload WebP → R2", [

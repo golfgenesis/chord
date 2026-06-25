@@ -1,11 +1,11 @@
-// Per-song fix in one command: re-extract the given id(s) with Gemini
-// (overwriting their data/songs-md/<id>.md), overwrite those same files on R2,
-// then rebuild songs.bin. Threads the id list into BOTH the backfill and the
-// upload — which a chained npm script can't do, since `npm run x -- <args>`
-// appends only to the LAST command in the chain.
+// Per-song fix in one command: re-extract the given id(s) with the local
+// Ollama vision model (overwriting their data/songs-md/<id>.md), overwrite
+// those same files on R2, then rebuild songs.bin. Threads the id list into
+// BOTH the backfill and the upload — which a chained npm script can't do,
+// since `npm run x -- <args>` appends only to the LAST command in the chain.
 //
-//   npm run ai:fix -- 2 4 19          (space- or comma-separated)
-//   npm run ai:fix -- 2,4,19
+//   npm run chordpro:fix -- 2 4 19          (space- or comma-separated)
+//   npm run chordpro:fix -- 2,4,19
 //   node scripts/fix.mjs 2 4 19
 
 import { spawnSync } from "node:child_process";
@@ -23,7 +23,7 @@ const ids = process.argv
   .filter((s) => /^\d+$/.test(s));
 
 if (ids.length === 0) {
-  console.error("usage: npm run ai:fix -- <id> [<id> ...]    e.g.  npm run ai:fix -- 2 4 19");
+  console.error("usage: npm run chordpro:fix -- <id> [<id> ...]    e.g.  npm run chordpro:fix -- 2 4 19");
   process.exit(1);
 }
 const list = ids.join(",");
@@ -44,8 +44,8 @@ function run(cmd, args) {
   }
 }
 
-console.log(`ai:fix → re-extracting + overwriting on R2: ${list}`);
-run("node", ["scripts/gemini-backfill.mjs", "--ids", list, "--force"]); // re-extract (overwrite local)
+console.log(`chordpro:fix → re-extracting + overwriting on R2: ${list}`);
+run("node", ["scripts/local-backfill.mjs", "--ids", list, "--force"]); // re-extract (overwrite local)
 run(PY[0], [...PY.slice(1), "scripts/upload_md_r2.py", "--ids", list]); // overwrite those on R2
 run("node", ["scripts/build-data.mjs"]); // refresh songs.bin (t-flags) — no-op diff for content-only fixes
 console.log(`\n✓ done: ${list} re-extracted, uploaded to R2, songs.bin rebuilt.`);

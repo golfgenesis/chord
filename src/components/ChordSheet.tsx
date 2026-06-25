@@ -8,7 +8,7 @@ import { preferFlatsForKey, transposeChord } from "../lib/musicTheory";
 // distinct via weight + accent colour, not a different typeface. Loaded async from
 // Google Fonts in index.html; the system stack is the fallback while it streams.
 const SHEET_FONT =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Noto Sans Thai", sans-serif';
+  '"Sarabun", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Noto Sans Thai", sans-serif';
 const LYRIC_FONT = SHEET_FONT;
 const CHORD_FONT = SHEET_FONT;
 // One chord size everywhere (Intro/Instru rows AND the labels above lyrics) so chords

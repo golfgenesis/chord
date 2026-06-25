@@ -26,8 +26,8 @@ members watching the singer's pick).
 - **ChordPro text first** — tap any row and the viewer fetches that song's
   inline-ChordPro sheet (`.md`) from R2, renders it as reflowing text, and
   lets you **transpose** to any key on the fly (music-theory based — no OCR).
-  The sheets are extracted offline by Gemini 2.5 Flash (see *ChordPro text*
-  below). The service worker caches each `.md` stale-while-revalidate, so a
+  The sheets are extracted offline by a **local Ollama vision model** (see
+  *ChordPro text* below). The service worker caches each `.md` stale-while-revalidate, so a
   song you've opened opens **instantly and works offline**.
 - **WebP image fallback** — songs not yet converted, or opened offline before
   their text was cached, fall back to the original WebP chord sheet from R2
@@ -149,8 +149,9 @@ members watching the singer's pick).
 - vite-plugin-pwa (custom SW under `injectManifest`)
 - idb-keyval for persisted favorites/playlists/latest
 - Cloudflare R2 Custom Domain + Snippet (image + ChordPro `.md` hosting, see DEPLOY.md)
-- `@google/genai` (Gemini 2.5 Flash) for offline ChordPro extraction;
-  `brotli` (payload decode), `qrcode` (room QR) — both client-side
+- Local **Ollama** vision model for offline ChordPro extraction (no cloud API,
+  no key) — a build-time script, not a client/runtime dependency
+- `brotli` (payload decode) + `qrcode` (room QR) — both client-side
 - Web Audio API (near-ultrasonic room-code transport)
 
 ## Get started
@@ -266,7 +267,7 @@ F:\chord\
 │   ├── sync_names.py                # rectify alt ↔ filename (PNG stage)
 │   ├── convert_to_webp.py           # PNG → WebP in place, delete source
 │   ├── upload_r2.py                 # bulk image upload to R2 (resumable)
-│   ├── gemini-backfill.mjs          # chord-sheet image → ChordPro .md (Gemini 2.5 Flash)
+│   ├── local-backfill.mjs           # chord-sheet image → ChordPro .md (local Ollama vision model)
 │   ├── upload_md_r2.py              # upload data/songs-md/*.md → R2 md/<id>.md
 │   ├── scan_weird_chars.py          # spot invisible control chars in titles
 │   ├── build-data.mjs               # results.json → public/songs.bin (+ t flag)
@@ -294,20 +295,31 @@ See `DEPLOY.md` for the click-by-click setup.
 ## ChordPro text (chord sheets as text)
 
 The viewer's primary mode renders **inline ChordPro markdown**, not the image.
-Those sheets are extracted **offline** from the chord-sheet images by
-**Gemini 2.5 Flash** and distributed via R2 — they are *not* bundled into
-`songs.bin` (which stays ≈0.9 MB for fast in-memory search).
+Those sheets are extracted **offline, 100% on-device** from the chord-sheet
+images by a **local Ollama vision model** and distributed via R2 — they are
+*not* bundled into `songs.bin` (which stays ≈0.9 MB for fast in-memory search).
+No cloud API, no API key, no rate limit.
 
-```powershell
-# 1) get a free key → https://aistudio.google.com/apikey , put in .env.local:
-#    GEMINI_API_KEY=...
-npm run chordpro:backfill   # image → data/songs-md/<id>.md  (resumable, 4s/img, skips cached)
+```bash
+# 1) install Ollama (https://ollama.com/download) and pull a vision model:
+#    ollama pull qwen2.5vl:7b                 # the configured default
+#    # (or any other vision model, then pass --model / set OLLAMA_MODEL)
+npm run chordpro:backfill   # image → data/songs-md/<id>.md  (resumable, no delay, skips cached)
 npm run data                # rebuild songs.bin (bakes a `t` has-text marker per song)
 npm run chordpro:upload     # push data/songs-md/*.md → R2 under md/<id>.md
 # or all three at once:
 npm run chordpro:ship
 ```
 
+- **100% local** — POSTs to your Ollama runtime at `http://127.0.0.1:11434`
+  (override `OLLAMA_HOST`). A preflight checks the server is up and the model is
+  pulled, and prints the exact `ollama pull` fix if not. Model: `--model` flag or
+  `OLLAMA_MODEL` env (default `qwen2.5vl:7b`).
+- **WebP → PNG** — Ollama can't decode WebP, so each image is transcoded to PNG
+  with macOS `sips` (ImageIO) before sending. No extra dependency on a Mac.
+- **No delay / no quota** — runs back-to-back as fast as Apple-Silicon unified
+  memory computes (the old 4 s rate gate + circuit breaker were cloud-only and
+  are gone). `--concurrency` defaults to 1 (one local model serializes on the GPU).
 - **Resumable** — already-extracted songs (a `data/songs-md/<id>.md` exists)
   are skipped; Ctrl+C and re-run any time. `--limit N`, `--start ID`,
   `--ids 1,2,3`, `--force` flags scope a run.
@@ -316,14 +328,11 @@ npm run chordpro:ship
 - **Offline** — the service worker caches each `.md` stale-while-revalidate;
   the client falls back to the WebP image when a song has no text / is opened
   offline before its text cached.
-- Fix one bad sheet: `node scripts/gemini-backfill.mjs --ids <id> --force`
-  then `npm run chordpro:upload` + `npm run data`.
+- Fix one bad sheet: `node scripts/local-backfill.mjs --ids <id> --force`
+  then `npm run chordpro:upload` + `npm run data` (or `npm run chordpro:fix -- <id>`).
 - **Automatic for new songs** — `npm run sync` runs this extraction + `.md`
   upload right after the image steps (scoped to the newly-scraped ids), so
   fresh songs get their text hands-free. Use `--skip-chordpro` for images only.
-- **24/7 backfill** — a circuit breaker (`--max-rate-errors`, default 6) stops
-  a run cleanly at the daily-quota / 503 wall, so a resumable loop on a server
-  pauses and resumes day by day instead of churning the queue.
 
 ## Adding new songs
 

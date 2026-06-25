@@ -1,7 +1,7 @@
 r"""
 Upload ChordPro markdown sheets to Cloudflare R2 (alongside the WebP images).
 
-Source:  data/songs-md/<id>.md      (produced by scripts/gemini-backfill.mjs)
+Source:  data/songs-md/<id>.md      (produced by scripts/local-backfill.mjs)
 Dest:    r2://<bucket>/md/<id>.md    (served by the same R2 Custom Domain)
 
 The client fetches  ${VITE_IMAGE_BASE}/md/<id>.md  at view time and the service
@@ -15,9 +15,9 @@ uploads new / changed files (size mismatch). Concurrent (16 threads).
 R2 credentials come from <project_root>/.env.local (R2_ACCESS_KEY / R2_SECRET_KEY).
 
     pip install boto3
-    py -3.11 scripts/upload_md_r2.py             # new / changed files only
-    py -3.11 scripts/upload_md_r2.py --force     # re-upload (overwrite) everything
-    py -3.11 scripts/upload_md_r2.py --ids 2,4   # overwrite only these <id>.md (for per-song fixes)
+    python3 scripts/upload_md_r2.py             # new / changed files only
+    python3 scripts/upload_md_r2.py --force     # re-upload (overwrite) everything
+    python3 scripts/upload_md_r2.py --ids 2,4   # overwrite only these <id>.md (for per-song fixes)
 """
 
 import sys
