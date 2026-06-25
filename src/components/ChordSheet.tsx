@@ -108,14 +108,19 @@ export function ChordSheet({ sheet, fromKey, toKey, invert }: Props) {
 }
 
 /**
- * One lyric line. Each `[chord]text` segment renders as an inline-block COLUMN —
- * the chord stacked above its text. The column's width is `max(chord, text)`, so a
- * chord label WIDER than the word below reserves its own space and pushes the next
- * column right instead of overlapping it (e.g. "G/B" over "ดี"). The chord always
- * stays above its own word, and the lyric still reads continuously because the
- * columns butt together (bottom-aligned baselines). Lines wrap at column (chord)
- * boundaries.
+ * One lyric line, rendered chord-over-lyric exactly like the original chord-sheet
+ * image. Each `[chord]text` segment is an inline-block whose WIDTH equals the lyric
+ * text only — the chord is absolutely positioned in a reserved top band (`paddingTop`)
+ * directly above its own syllable, so a chord WIDER than the word below it (e.g.
+ * "G/B" over "ดี") overflows to the right WITHOUT pushing the lyric apart. The lyric
+ * therefore flows continuously like printed text, while every chord still lands right
+ * above the syllable it belongs to. The reserved top band is a per-segment padding
+ * (not a one-off line margin) so it travels with each visual row when a long line
+ * wraps. Lines wrap at segment (chord) boundaries.
  */
+// Height of the chord band reserved above the lyric (≈ chord cap-height + breathing
+// room). Tuned to match the gap on the source sheets without crowding the line above.
+const CHORD_BAND = "1.45em";
 function LyricLine({
   segments,
   tx,
@@ -155,23 +160,34 @@ function LyricLine({
         <span
           key={i}
           style={{
+            position: "relative",
             display: "inline-block",
             verticalAlign: "bottom",
             whiteSpace: "pre-wrap",
+            // Reserve the chord band on EVERY segment of a chorded line (even the
+            // chord-less ones) so the lyric baseline stays level across the line and
+            // the band repeats above each row when the line wraps.
+            paddingTop: hasChord ? CHORD_BAND : undefined,
           }}
         >
           {seg.chord && (
             <span
               aria-hidden="true"
               style={{
-                display: "block",
+                // Absolute → the chord sits in the reserved band above its syllable
+                // and DOES NOT add to the segment's width, so the lyric never gets
+                // pushed apart. A wider-than-syllable chord overflows right (over the
+                // empty band above the next syllable), just like the source sheet.
+                position: "absolute",
+                top: 0,
+                left: 0,
                 fontFamily: CHORD_FONT,
                 fontWeight: 700,
                 fontSize: CHORD_EM,
                 lineHeight: 1.35,
                 color: ink,
                 whiteSpace: "nowrap",
-                paddingRight: "0.65em", // guarantees a gap to the next chord
+                paddingRight: "0.6em", // min gap before the next chord if they crowd
               }}
             >
               {tx(seg.chord)}
