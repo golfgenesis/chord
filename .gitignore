@@ -8,6 +8,9 @@
 /logs
 /scripts/.chordpro_cache
 
+# Python venv for the CV/geometric tooling (numpy/scipy/Pillow).
+/scripts/.venv
+
 # Local-only
 .env
 .env.local

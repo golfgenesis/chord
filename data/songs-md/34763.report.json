@@ -1,0 +1,28 @@
+{
+ "id": 34763,
+ "name": "ไว้ใจ 20October",
+ "lyric_exact": true,
+ "thai_chars": [
+  866,
+  866
+ ],
+ "palette": [
+  "Cmaj7",
+  "Fmaj7",
+  "Dm",
+  "Em",
+  "F",
+  "G",
+  "Am"
+ ],
+ "bad_chords": [],
+ "chords_placed": 60,
+ "instr_rows": 5,
+ "lyric_bands": 16,
+ "thai_lines": 17,
+ "rows_count_match": false,
+ "avg_id_score": 0.687,
+ "id_confidence": 1.0,
+ "low_score_lines": [],
+ "needs_review": true
+}

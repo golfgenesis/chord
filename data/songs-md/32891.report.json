@@ -1,0 +1,27 @@
+{
+ "id": 32891,
+ "name": "ขอโทษ(ที่ใจร้าย) วงโดเรม่อน",
+ "lyric_exact": true,
+ "thai_chars": [
+  491,
+  491
+ ],
+ "palette": [
+  "G",
+  "Am",
+  "Bm",
+  "C",
+  "D",
+  "Em"
+ ],
+ "bad_chords": [],
+ "chords_placed": 33,
+ "instr_rows": 4,
+ "lyric_bands": 8,
+ "thai_lines": 8,
+ "rows_count_match": true,
+ "avg_id_score": 0.74,
+ "id_confidence": 1.0,
+ "low_score_lines": [],
+ "needs_review": false
+}

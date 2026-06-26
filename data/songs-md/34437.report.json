@@ -1,0 +1,27 @@
+{
+ "id": 34437,
+ "name": "สวดจูนพูน ดิด คิตตี้",
+ "lyric_exact": true,
+ "thai_chars": [
+  628,
+  628
+ ],
+ "palette": [
+  "G",
+  "Am",
+  "Bm",
+  "C",
+  "D",
+  "Em"
+ ],
+ "bad_chords": [],
+ "chords_placed": 58,
+ "instr_rows": 4,
+ "lyric_bands": 13,
+ "thai_lines": 13,
+ "rows_count_match": true,
+ "avg_id_score": 0.719,
+ "id_confidence": 1.0,
+ "low_score_lines": [],
+ "needs_review": false
+}

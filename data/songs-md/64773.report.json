@@ -1,0 +1,35 @@
+{
+ "id": 64773,
+ "name": "คำว่าพ่อมันท้อบ่ได้ ต๊ะ มิสเตอร์แคน",
+ "lyric_exact": true,
+ "thai_chars": [
+  468,
+  468
+ ],
+ "palette": [
+  "D",
+  "Em",
+  "F#m",
+  "G",
+  "A",
+  "Bm"
+ ],
+ "bad_chords": [],
+ "chords_placed": 41,
+ "instr_rows": 8,
+ "lyric_bands": 7,
+ "thai_lines": 14,
+ "rows_count_match": false,
+ "avg_id_score": 0.654,
+ "id_confidence": 0.951,
+ "low_score_lines": [
+  {
+   "line": 5,
+   "low_score_chords": [
+    "D",
+    "A"
+   ]
+  }
+ ],
+ "needs_review": true
+}

@@ -1,0 +1,25 @@
+{
+ "id": 37095,
+ "name": "คือราย (So What) BOWKYLION",
+ "lyric_exact": true,
+ "thai_chars": [
+  535,
+  535
+ ],
+ "palette": [
+  "Ab",
+  "Gm",
+  "Cm",
+  "Bb"
+ ],
+ "bad_chords": [],
+ "chords_placed": 32,
+ "instr_rows": 5,
+ "lyric_bands": 7,
+ "thai_lines": 9,
+ "rows_count_match": false,
+ "avg_id_score": 0.577,
+ "id_confidence": 1.0,
+ "low_score_lines": [],
+ "needs_review": true
+}

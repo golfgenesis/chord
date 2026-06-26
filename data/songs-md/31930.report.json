@@ -1,0 +1,27 @@
+{
+ "id": 31930,
+ "name": "คนข้างหลัง แต้ ศิลา",
+ "lyric_exact": true,
+ "thai_chars": [
+  503,
+  503
+ ],
+ "palette": [
+  "E",
+  "F#m",
+  "G#m",
+  "A",
+  "B",
+  "C#m"
+ ],
+ "bad_chords": [],
+ "chords_placed": 41,
+ "instr_rows": 8,
+ "lyric_bands": 7,
+ "thai_lines": 8,
+ "rows_count_match": false,
+ "avg_id_score": 0.738,
+ "id_confidence": 1.0,
+ "low_score_lines": [],
+ "needs_review": true
+}

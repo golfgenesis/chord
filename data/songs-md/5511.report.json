@@ -1,0 +1,47 @@
+{
+ "id": 5511,
+ "name": "ไม่รู้ เป้ อารักษ์",
+ "lyric_exact": true,
+ "thai_chars": [
+  1235,
+  1235
+ ],
+ "palette": [
+  "G",
+  "C",
+  "D7"
+ ],
+ "bad_chords": [],
+ "chords_placed": 41,
+ "instr_rows": 13,
+ "lyric_bands": 10,
+ "thai_lines": 43,
+ "rows_count_match": false,
+ "avg_id_score": 0.62,
+ "id_confidence": 0.829,
+ "low_score_lines": [
+  {
+   "line": 1,
+   "low_score_chords": [
+    "D7",
+    "C",
+    "D7",
+    "D7",
+    "C"
+   ]
+  },
+  {
+   "line": 6,
+   "low_score_chords": [
+    "D7"
+   ]
+  },
+  {
+   "line": 7,
+   "low_score_chords": [
+    "D7"
+   ]
+  }
+ ],
+ "needs_review": true
+}
