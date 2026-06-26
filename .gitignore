@@ -11,6 +11,11 @@
 # Python venv for the CV/geometric tooling (numpy/scipy/Pillow).
 /scripts/.venv
 
+# De-watermark pipeline (scripts/dewatermark.py): local backup of every R2
+# original taken before its in-place overwrite, plus the --dry-run previews.
+/images-orig
+/data/wm-preview-out
+
 # Local-only
 .env
 .env.local
